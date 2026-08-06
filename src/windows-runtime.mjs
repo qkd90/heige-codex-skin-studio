@@ -393,21 +393,39 @@ export async function queryWindowsRuntimeSnapshot({
   }
   absoluteWindowsPath(powershellPath, "trusted Windows PowerShell path");
   absoluteWindowsPath(commonScriptPath, "trusted Windows resolver path");
-  const { stdout, stderr = "" } = await execFileImpl(powershellPath, [
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    WINDOWS_RUNTIME_SCRIPT,
-    commonScriptPath,
-    String(port),
-    identityToken ?? "",
-  ], {
-    env: isolatedWindowsPowerShellEnvironment(env),
-    timeout: 15_000,
-    maxBuffer: 256 * 1024,
-    windowsHide: true,
-  });
+  let execution;
+  try {
+    execution = await execFileImpl(powershellPath, [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      WINDOWS_RUNTIME_SCRIPT,
+      commonScriptPath,
+      String(port),
+      identityToken ?? "",
+    ], {
+      env: isolatedWindowsPowerShellEnvironment(env),
+      timeout: 15_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true,
+    });
+  } catch (cause) {
+    const rawDetail = Buffer.isBuffer(cause?.stderr)
+      ? cause.stderr.toString("utf8")
+      : String(cause?.stderr ?? "");
+    const detail = (identityToken
+      ? rawDetail.replaceAll(identityToken, "[redacted]")
+      : rawDetail).trim().slice(0, 1_000);
+    throw new Error(
+      detail.length === 0
+        ? "Windows runtime snapshot command failed"
+        : `Windows runtime snapshot command failed: ${detail}`,
+    );
+  }
+  const { stdout, stderr = "" } = execution;
   if (String(stderr).trim().length !== 0) {
     throw new Error("Windows runtime snapshot wrote unexpected stderr");
   }
@@ -451,7 +469,9 @@ function uniqueRoot(processes) {
   if (processes.size === 0) return null;
   const roots = [...processes.values()].filter((entry) => !processes.has(entry.parentProcessId));
   if (roots.length !== 1) {
-    throw new Error("Windows Codex process graph does not have one unique root");
+    const error = new Error("Windows Codex process graph does not have one unique root");
+    error.code = "CODEX_PROCESS_AMBIGUOUS";
+    throw error;
   }
   const root = roots[0];
   for (const entry of processes.values()) {
@@ -459,13 +479,17 @@ function uniqueRoot(processes) {
     let current = entry;
     while (processes.has(current.parentProcessId)) {
       if (visited.has(current.pid)) {
-        throw new Error("Windows Codex process graph contains an ownership cycle");
+        const error = new Error("Windows Codex process graph contains an ownership cycle");
+        error.code = "CODEX_PROCESS_AMBIGUOUS";
+        throw error;
       }
       visited.add(current.pid);
       current = processes.get(current.parentProcessId);
     }
     if (current.pid !== root.pid) {
-      throw new Error("Windows Codex process graph contains an orphan component");
+      const error = new Error("Windows Codex process graph contains an orphan component");
+      error.code = "CODEX_PROCESS_AMBIGUOUS";
+      throw error;
     }
   }
   return root;

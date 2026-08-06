@@ -92,6 +92,10 @@ test("Windows runtime query uses one trusted PowerShell command and accepts only
   assert.equal(calls[0].file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
   assert.equal(calls[0].args.includes("C:\\repo\\scripts\\windows\\lib\\common.ps1"), true);
   assert.equal(calls[0].args.includes("9341"), true);
+  assert.deepEqual(
+    calls[0].args.slice(0, 6),
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"],
+  );
   assert.deepEqual(calls[0].options, {
     env: {
       SystemRoot: "C:\\Windows",
@@ -166,6 +170,22 @@ test("Windows runtime binds every query to the immutable PowerShell app identity
       throw new Error("malformed identity must fail before PowerShell");
     },
   }), /identity|token|base64/i);
+
+  const leakedCommandError = new Error(`Command failed with identity ${token}`);
+  leakedCommandError.stderr = `immutable identity failed: ${token}`;
+  await assert.rejects(queryWindowsRuntimeSnapshot({
+    port: 9341,
+    powershellPath: calls[0].file,
+    commonScriptPath: "C:\\repo\\scripts\\windows\\lib\\common.ps1",
+    env: { HEIGE_WINDOWS_APP_IDENTITY: token },
+    execFileImpl: async () => { throw leakedCommandError; },
+  }), (error) => {
+    assert.match(error.message, /runtime snapshot command failed/i);
+    assert.match(error.message, /immutable identity failed/i);
+    assert.doesNotMatch(error.message, new RegExp(token));
+    assert.doesNotMatch(error.message, /Command failed with identity/i);
+    return true;
+  });
 
   await assert.rejects(queryWindowsRuntimeSnapshot({
     port: 9341,
@@ -425,6 +445,12 @@ test("Windows preflight fails closed for ambiguous roots and non-exact listener 
       requirePort: value.listeners.length > 0,
     }), /ambiguous|unique|loopback|owner|identity|process/i);
   }
+  assert.throws(
+    () => classifyWindowsPreflightSnapshot(snapshot({
+      processes: [root, processRecord({ pid: 5252, parentProcessId: 101 })],
+    }), { port: 9341, requirePort: false }),
+    (error) => error.code === "CODEX_PROCESS_AMBIGUOUS",
+  );
 });
 
 test("Windows StoreAumid closed snapshots remain valid with null executablePath", () => {

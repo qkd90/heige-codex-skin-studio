@@ -568,8 +568,18 @@ export async function productionPreflight({
         powershellPath: windowsPowerShellPath(),
         commonScriptPath: join(repositoryRoot, "scripts", "windows", "lib", "common.ps1"),
       }));
-    const snapshot = await queryWindowsRuntime({ port });
-    return classifyWindowsPreflightSnapshot(snapshot, { port, requirePort });
+    const waitForSnapshotRetry = dependencies.waitForWindowsSnapshotRetry
+      ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const snapshot = await queryWindowsRuntime({ port });
+      try {
+        return classifyWindowsPreflightSnapshot(snapshot, { port, requirePort });
+      } catch (error) {
+        if (error?.code !== "CODEX_PROCESS_AMBIGUOUS" || attempt === 3) throw error;
+        await waitForSnapshotRetry(100 * (attempt + 1));
+      }
+    }
+    throw new Error("Windows runtime snapshot retry exhausted");
   }
   if (platform !== "darwin") throw new Error(`不支持的平台：${platform}`);
   const resolveMacApp = dependencies.resolveMacApp ?? resolveCodexApp;

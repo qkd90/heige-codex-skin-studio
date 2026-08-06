@@ -2885,6 +2885,94 @@ test("production preflight binds the Windows platform to the trusted runtime sna
   assert.deepEqual(calls, [{ port: 9341 }]);
 });
 
+test("Windows production preflight resamples a transient ambiguous process graph", async () => {
+  const executablePath = "C:\\Program Files\\Codex\\Codex.exe";
+  const base = {
+    schemaVersion: 1,
+    app: {
+      kind: "Win32",
+      executablePath,
+      installPath: "C:\\Program Files\\Codex",
+      productName: "Codex",
+      packageFullName: null,
+      aumid: null,
+      launchTarget: executablePath,
+    },
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+    listeners: [],
+  };
+  const startedAt = "2026-07-17T08:00:00.0000000Z";
+  const snapshots = [
+    {
+      ...base,
+      processes: [
+        { pid: 4101, parentProcessId: 100, executablePath, startedAt },
+        { pid: 4102, parentProcessId: 200, executablePath, startedAt },
+      ],
+    },
+    {
+      ...base,
+      processes: [{ pid: 4101, parentProcessId: 100, executablePath, startedAt }],
+    },
+  ];
+  const delays = [];
+  const result = await productionPreflight({
+    port: 9341,
+    requirePort: false,
+    platform: "win32",
+    dependencies: {
+      queryWindowsRuntime: async () => snapshots.shift(),
+      waitForWindowsSnapshotRetry: async (milliseconds) => { delays.push(milliseconds); },
+    },
+  });
+  assert.deepEqual(result.process, { pid: 4101, executablePath, startedAt });
+  assert.deepEqual(delays, [100]);
+  assert.equal(snapshots.length, 0);
+});
+
+test("Windows production preflight still rejects persistent ambiguous process graphs", async () => {
+  const executablePath = "C:\\Program Files\\Codex\\Codex.exe";
+  const ambiguous = {
+    schemaVersion: 1,
+    app: {
+      kind: "Win32",
+      executablePath,
+      installPath: "C:\\Program Files\\Codex",
+      productName: "Codex",
+      packageFullName: null,
+      aumid: null,
+      launchTarget: executablePath,
+    },
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+    processes: [
+      {
+        pid: 4101,
+        parentProcessId: 100,
+        executablePath,
+        startedAt: "2026-07-17T08:00:00.0000000Z",
+      },
+      {
+        pid: 4102,
+        parentProcessId: 200,
+        executablePath,
+        startedAt: "2026-07-17T08:00:01.0000000Z",
+      },
+    ],
+    listeners: [],
+  };
+  let queries = 0;
+  await assert.rejects(productionPreflight({
+    port: 9341,
+    requirePort: false,
+    platform: "win32",
+    dependencies: {
+      queryWindowsRuntime: async () => { queries += 1; return ambiguous; },
+      waitForWindowsSnapshotRetry: async () => {},
+    },
+  }), (error) => error.code === "CODEX_PROCESS_AMBIGUOUS");
+  assert.equal(queries, 4);
+});
+
 test("Windows production controller probe keeps Store attribution and rejects a same-name foreign listener", async () => {
   const storeRoot = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.0.0.0_x64__abc";
   const base = {
