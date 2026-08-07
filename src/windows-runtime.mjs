@@ -10,6 +10,7 @@ const PROCESS_STARTED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,7}Z$/;
 const PROCESS_NAMES = new Set(["chatgpt", "codex"]);
 const APP_KINDS = new Set(["Win32", "StoreAlias", "StoreAumid"]);
 const TEST_FIXTURE_MAX_BYTES = 256 * 1024;
+const WINDOWS_RUNTIME_TIMEOUT_MS = 30_000;
 const APP_IDENTITY_ENV = "HEIGE_WINDOWS_APP_IDENTITY";
 const APP_IDENTITY_PRODUCT = "heige-codex-skin-studio";
 const APP_IDENTITY_MAX_BYTES = 8 * 1024;
@@ -394,36 +395,48 @@ export async function queryWindowsRuntimeSnapshot({
   absoluteWindowsPath(powershellPath, "trusted Windows PowerShell path");
   absoluteWindowsPath(commonScriptPath, "trusted Windows resolver path");
   let execution;
-  try {
-    execution = await execFileImpl(powershellPath, [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      WINDOWS_RUNTIME_SCRIPT,
-      commonScriptPath,
-      String(port),
-      identityToken ?? "",
-    ], {
-      env: isolatedWindowsPowerShellEnvironment(env),
-      timeout: 15_000,
-      maxBuffer: 256 * 1024,
-      windowsHide: true,
-    });
-  } catch (cause) {
-    const rawDetail = Buffer.isBuffer(cause?.stderr)
-      ? cause.stderr.toString("utf8")
-      : String(cause?.stderr ?? "");
-    const detail = (identityToken
-      ? rawDetail.replaceAll(identityToken, "[redacted]")
-      : rawDetail).trim().slice(0, 1_000);
-    throw new Error(
-      detail.length === 0
-        ? "Windows runtime snapshot command failed"
-        : `Windows runtime snapshot command failed: ${detail}`,
-    );
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      execution = await execFileImpl(powershellPath, [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        WINDOWS_RUNTIME_SCRIPT,
+        commonScriptPath,
+        String(port),
+        identityToken ?? "",
+      ], {
+        env: isolatedWindowsPowerShellEnvironment(env),
+        timeout: WINDOWS_RUNTIME_TIMEOUT_MS,
+        maxBuffer: 256 * 1024,
+        windowsHide: true,
+      });
+      break;
+    } catch (cause) {
+      const rawDetail = Buffer.isBuffer(cause?.stderr)
+        ? cause.stderr.toString("utf8")
+        : String(cause?.stderr ?? "");
+      const detail = (identityToken
+        ? rawDetail.replaceAll(identityToken, "[redacted]")
+        : rawDetail).trim().slice(0, 1_000);
+      const timedOut = cause?.killed === true && cause?.signal === "SIGTERM"
+        && detail.length === 0;
+      if (timedOut && attempt === 0) continue;
+      const error = new Error(
+        timedOut
+          ? `Windows runtime snapshot timed out after ${WINDOWS_RUNTIME_TIMEOUT_MS} ms`
+          : detail.length === 0
+            ? "Windows runtime snapshot command failed"
+            : `Windows runtime snapshot command failed: ${detail}`,
+      );
+      error.code = timedOut
+        ? "WINDOWS_RUNTIME_SNAPSHOT_TIMEOUT"
+        : "WINDOWS_RUNTIME_SNAPSHOT_FAILED";
+      throw error;
+    }
   }
   const { stdout, stderr = "" } = execution;
   if (String(stderr).trim().length !== 0) {

@@ -2105,6 +2105,13 @@ export function buildSkinMenuScript({
     const requestPersistence = async (target, restoreFocus = false) => {
       assertCurrent();
       if (pending || target === persistenceEnabled) return;
+      if (
+        themePending ||
+        (controlRequest !== null && controlRequest.action !== "set-persistence")
+      ) {
+        showAlert("正在保存启动器主题，请稍候后再修改皮肤常驻。", "success");
+        return;
+      }
       const previousEnabled = persistenceEnabled;
       const requestRevision = controlRevision;
       const fallbackRequest = {
@@ -2229,6 +2236,13 @@ export function buildSkinMenuScript({
     const activatePersistenceSwitch = () => {
       assertCurrent();
       if (pending) return;
+      if (
+        themePending ||
+        (controlRequest !== null && controlRequest.action !== "set-persistence")
+      ) {
+        showAlert("正在保存启动器主题，请稍候后再修改皮肤常驻。", "success");
+        return;
+      }
       if (persistenceEnabled) {
         hideAlert();
         confirmation.hidden = false;

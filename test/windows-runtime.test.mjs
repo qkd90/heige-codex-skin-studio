@@ -101,7 +101,7 @@ test("Windows runtime query uses one trusted PowerShell command and accepts only
       SystemRoot: "C:\\Windows",
       PATH: "C:\\Windows\\System32",
     },
-    timeout: 15_000,
+    timeout: 30_000,
     maxBuffer: 256 * 1024,
     windowsHide: true,
   });
@@ -201,6 +201,54 @@ test("Windows runtime binds every query to the immutable PowerShell app identity
       stderr: "",
     }),
   }), /process path|belong|identity|app/i);
+});
+
+test("Windows runtime retries one empty-output PowerShell timeout and then succeeds", async () => {
+  const expected = snapshot();
+  const calls = [];
+  const timeout = Object.assign(new Error("must not expose the generated command"), {
+    killed: true,
+    signal: "SIGTERM",
+    stdout: "",
+    stderr: "",
+  });
+  const result = await queryWindowsRuntimeSnapshot({
+    port: 9341,
+    powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    commonScriptPath: "C:\\repo\\scripts\\windows\\lib\\common.ps1",
+    execFileImpl: async (_file, _args, options) => {
+      calls.push(options);
+      if (calls.length === 1) throw timeout;
+      return { stdout: JSON.stringify(expected), stderr: "" };
+    },
+  });
+  assert.deepEqual(result, expected);
+  assert.equal(calls.length, 2);
+  assert.equal(calls.every((options) => options.timeout === 30_000), true);
+});
+
+test("Windows runtime reports a persistent empty-output PowerShell timeout explicitly", async () => {
+  let calls = 0;
+  await assert.rejects(queryWindowsRuntimeSnapshot({
+    port: 9341,
+    powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    commonScriptPath: "C:\\repo\\scripts\\windows\\lib\\common.ps1",
+    execFileImpl: async () => {
+      calls += 1;
+      throw Object.assign(new Error("must not expose the generated command"), {
+        killed: true,
+        signal: "SIGTERM",
+        stdout: "",
+        stderr: "",
+      });
+    },
+  }), (error) => {
+    assert.equal(error.code, "WINDOWS_RUNTIME_SNAPSHOT_TIMEOUT");
+    assert.match(error.message, /timed out after 30000 ms/i);
+    assert.doesNotMatch(error.message, /generated command/i);
+    return true;
+  });
+  assert.equal(calls, 2);
 });
 
 test("Windows identity token rejects duplicate and unknown JSON fields", () => {
