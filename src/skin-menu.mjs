@@ -1746,8 +1746,9 @@ export function buildSkinMenuScript({
         clearControlRequest();
       }
       controlRequest = request;
-      // 常驻 CDP 兜底不宜拖太久；主题 / 用户主题发布仍保留较长窗口。
-      const fallbackTimeoutMs = request.action === "set-persistence" ? 20_000 : 60_000;
+      // Windows 首次开启常驻需完成计划任务注册、Store 身份复核和后台握手；
+      // 冷启动可超过 60s，不能在权威事务仍进行时先误报「未确认」。
+      const fallbackTimeoutMs = request.action === "set-persistence" ? 90_000 : 60_000;
       controlRequestTimeout = later(() => {
         if (controlRequest?.requestId !== request.requestId) return;
         const timedOut = controlRequest;
