@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="47b03d1f-84d1-4d88-9c68-fda7ed444667" name="更改" comment="test(skin-menu): 在保存主题时阻止皮肤常驻并提示等待&#10;&#10;- 在请求或激活皮肤常驻时，检测是否有主题正在保存&#10;- 如果正在保存主题，显示“正在保存启动器主题，请稍候后再修改皮肤常驻”的成功提示&#10;- 防止在主题保存过程中竞争控制请求&#10;- 添加测试用例验证该逻辑，确保提示文本和状态正确&#10;&#10;fix(windows-runtime): 增加 PowerShell 运行超时重试机制&#10;&#10;- 将 Windows 运行时 PowerShell 命令超时从 15 秒提升至 30 秒&#10;- 在抛出空输出超时错误时自动重试一次执行命令&#10;- 超时后区分抛出超时错误码和失败错误码，错误信息屏蔽敏感内容&#10;- 添加测试覆盖重试成功与持续超时的异常情形&#10;&#10;chore(vcs): 修正 VCS 目录映射，确保项目目录关联 Git&#10;&#10;- 在 .idea/vcs.xml 中添加映射，修正项目根目录的 VCS 绑定问题" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;qkd90&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/qkd90/heige-codex-skin-studio.git&quot;,
+    &quot;accountId&quot;: &quot;26673b73-043a-4bec-9fe1-dbab0ac63f61&quot;
+  }
+}</component>
+  <component name="PackageJsonUpdateNotifier">
+    <dismissed value="$PROJECT_DIR$/package.json" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3HWtCd5x1kRyqHk2mLFSE0DF5J0" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "kotlin-language-version-configured": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "preferences.pluginManager",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RunManager">
+    <configuration default="true" type="JetRunConfigurationType">
+      <module name="heige-codex-skin-studio" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="KotlinStandaloneScriptRunConfigurationType">
+      <module name="heige-codex-skin-studio" />
+      <option name="filePath" />
+      <method v="2" />
+    </configuration>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-37e91769500f-intellij.indexing.shared.core-IU-261.25134.95" />
+        <option value="bundled-js-predefined-d6986cc7102b-31caf2ab9e3c-JavaScript-IU-261.25134.95" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="47b03d1f-84d1-4d88-9c68-fda7ed444667" name="更改" comment="" />
+      <created>1785995529247</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1785995529247</updated>
+      <workItem from="1785995533177" duration="1655000" />
+      <workItem from="1785997579393" duration="29000" />
+      <workItem from="1786092687940" duration="108000" />
+      <workItem from="1786092814384" duration="243000" />
+      <workItem from="1786093065738" duration="65000" />
+      <workItem from="1786420282019" duration="952000" />
+      <workItem from="1786425806941" duration="42000" />
+      <workItem from="1786499405609" duration="5000" />
+      <workItem from="1789354462339" duration="108000" />
+    </task>
+    <task id="LOCAL-00001" summary="fix(windows): 优化Windows运行时快照获取及模糊进程图处理&#10;&#10;- 为模糊的进程图增加重试机制，最多尝试4次并适当延迟&#10;- 修改PowerShell调用参数，添加-ExecutionPolicy Bypass以提升执行成功率&#10;- 捕获并清理错误信息中的敏感identityToken，确保日志安全&#10;- 对进程图异常抛出带有CODEX_PROCESS_AMBIGUOUS代码的错误，便于识别处理&#10;- 添加针对模糊进程图的单元测试，覆盖重试成功和失败两种场景&#10;- 增加对PowerShell执行命令参数的单元测试及错误消息敏感内容过滤验证">
+      <option name="closed" value="true" />
+      <created>1785995826032</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1785995826032</updated>
+    </task>
+    <task id="LOCAL-00002" summary="test(skin-menu): 在保存主题时阻止皮肤常驻并提示等待&#10;&#10;- 在请求或激活皮肤常驻时，检测是否有主题正在保存&#10;- 如果正在保存主题，显示“正在保存启动器主题，请稍候后再修改皮肤常驻”的成功提示&#10;- 防止在主题保存过程中竞争控制请求&#10;- 添加测试用例验证该逻辑，确保提示文本和状态正确&#10;&#10;fix(windows-runtime): 增加 PowerShell 运行超时重试机制&#10;&#10;- 将 Windows 运行时 PowerShell 命令超时从 15 秒提升至 30 秒&#10;- 在抛出空输出超时错误时自动重试一次执行命令&#10;- 超时后区分抛出超时错误码和失败错误码，错误信息屏蔽敏感内容&#10;- 添加测试覆盖重试成功与持续超时的异常情形&#10;&#10;chore(vcs): 修正 VCS 目录映射，确保项目目录关联 Git&#10;&#10;- 在 .idea/vcs.xml 中添加映射，修正项目根目录的 VCS 绑定问题">
+      <option name="closed" value="true" />
+      <created>1786093104856</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1786093104856</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="CHECK_CODE_SMELLS_BEFORE_PROJECT_COMMIT" value="false" />
+    <option name="CHECK_NEW_TODO" value="false" />
+    <MESSAGE value="fix(windows): 优化Windows运行时快照获取及模糊进程图处理&#10;&#10;- 为模糊的进程图增加重试机制，最多尝试4次并适当延迟&#10;- 修改PowerShell调用参数，添加-ExecutionPolicy Bypass以提升执行成功率&#10;- 捕获并清理错误信息中的敏感identityToken，确保日志安全&#10;- 对进程图异常抛出带有CODEX_PROCESS_AMBIGUOUS代码的错误，便于识别处理&#10;- 添加针对模糊进程图的单元测试，覆盖重试成功和失败两种场景&#10;- 增加对PowerShell执行命令参数的单元测试及错误消息敏感内容过滤验证" />
+    <MESSAGE value="test(skin-menu): 在保存主题时阻止皮肤常驻并提示等待&#10;&#10;- 在请求或激活皮肤常驻时，检测是否有主题正在保存&#10;- 如果正在保存主题，显示“正在保存启动器主题，请稍候后再修改皮肤常驻”的成功提示&#10;- 防止在主题保存过程中竞争控制请求&#10;- 添加测试用例验证该逻辑，确保提示文本和状态正确&#10;&#10;fix(windows-runtime): 增加 PowerShell 运行超时重试机制&#10;&#10;- 将 Windows 运行时 PowerShell 命令超时从 15 秒提升至 30 秒&#10;- 在抛出空输出超时错误时自动重试一次执行命令&#10;- 超时后区分抛出超时错误码和失败错误码，错误信息屏蔽敏感内容&#10;- 添加测试覆盖重试成功与持续超时的异常情形&#10;&#10;chore(vcs): 修正 VCS 目录映射，确保项目目录关联 Git&#10;&#10;- 在 .idea/vcs.xml 中添加映射，修正项目根目录的 VCS 绑定问题" />
+    <option name="LAST_COMMIT_MESSAGE" value="test(skin-menu): 在保存主题时阻止皮肤常驻并提示等待&#10;&#10;- 在请求或激活皮肤常驻时，检测是否有主题正在保存&#10;- 如果正在保存主题，显示“正在保存启动器主题，请稍候后再修改皮肤常驻”的成功提示&#10;- 防止在主题保存过程中竞争控制请求&#10;- 添加测试用例验证该逻辑，确保提示文本和状态正确&#10;&#10;fix(windows-runtime): 增加 PowerShell 运行超时重试机制&#10;&#10;- 将 Windows 运行时 PowerShell 命令超时从 15 秒提升至 30 秒&#10;- 在抛出空输出超时错误时自动重试一次执行命令&#10;- 超时后区分抛出超时错误码和失败错误码，错误信息屏蔽敏感内容&#10;- 添加测试覆盖重试成功与持续超时的异常情形&#10;&#10;chore(vcs): 修正 VCS 目录映射，确保项目目录关联 Git&#10;&#10;- 在 .idea/vcs.xml 中添加映射，修正项目根目录的 VCS 绑定问题" />
+  </component>
+</project>
