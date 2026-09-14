@@ -432,6 +432,9 @@ function normalizedDependencies(input) {
       "verifyBackgroundHandshake",
     ),
     backgroundProcess: input.backgroundProcess === true,
+    // 宿主 renderer 够不到本机控制服务时传 false：不起服务，菜单退回纯本地切换。
+    // 缺省 true，任何没显式传的老路径行为不变。
+    supportsControlChannel: input.supportsControlChannel !== false,
     allowInternalPersistenceEnable: input.allowInternalPersistenceEnable === true,
     newTransitionNonce: input.newTransitionNonce ?? randomUUID,
     fault: input.fault ?? (async () => {}),
@@ -770,6 +773,8 @@ export function createSkinController(input) {
   let processRendererRequest;
 
   const ensureServer = async (state) => {
+    // 不支持控制通道的宿主：不起服务，control 传 null，菜单自动降级成本地切换
+    if (!deps.supportsControlChannel) return { started: false, control: null };
     const started = server === null;
     if (server === null) {
       server = await deps.startControlServer({
@@ -1146,7 +1151,8 @@ export function createSkinController(input) {
       // Codex CSP 会拦 renderer→本机 HTTP，菜单删除/发布只能靠 CDP。
       // 即使 session 尚未完全对齐（apply 后 keepUntilProcessExit / 身份过渡），
       // 只要进程与端口可用，也必须先抽干 controlRequest，否则会一直等到超时。
-      if (before.transition !== null || before.process === null) return null;
+      // 常驻握手的 transition journal 不得挡住主题/用户主题 CDP；只推迟 set-persistence。
+      if (before.process === null) return null;
 
       await assertPortOwner(before.process, {
         reuseCurrentProcessSnapshot: true,
@@ -1156,7 +1162,7 @@ export function createSkinController(input) {
         expected: {
           themeId: before.state.selectedThemeId,
           mode: expectedMode,
-          persistenceEnabled: true,
+          persistenceEnabled: before.state.persistenceEnabled,
           revision: before.state.revision,
         },
         process: before.process,
@@ -1165,15 +1171,20 @@ export function createSkinController(input) {
       if (typeof processRendererRequest === "function") {
         const request = pendingRendererControlRequest(observedHealth);
         if (request !== null) {
-          sawControlRequest = true;
-          const handled = await processRendererRequest(request);
-          if (handled !== null) {
-            return isRecord(handled)
-              ? { ...handled, interactive: true }
-              : handled;
+          const blockPersistence = before.transition !== null &&
+            request.action === "set-persistence";
+          if (!blockPersistence) {
+            sawControlRequest = true;
+            const handled = await processRendererRequest(request);
+            if (handled !== null) {
+              return isRecord(handled)
+                ? { ...handled, interactive: true }
+                : handled;
+            }
           }
         }
       }
+      if (before.transition !== null) return null;
       if (!sessionMatches) return null;
       const stableSession = before.state.persistenceEnabled === true
         ? before.session.keepUntilProcessExit === false
@@ -1658,12 +1669,26 @@ export function createSkinController(input) {
       name,
       ...(colors === undefined ? {} : { colors }),
     });
-    return setThemeSelection({
-      expectedRevision,
-      themeId: created.id,
-      requestId,
-      signal,
-    });
+    try {
+      return await setThemeSelection({
+        expectedRevision,
+        themeId: created.id,
+        requestId,
+        signal,
+      });
+    } catch (error) {
+      // 补偿清理：CAS 冲突或请求在创建与选择之间 abort 时，
+      // 已落盘的用户主题目录会变成孤儿，这里按 id 回收；
+      // 清理失败只记日志，原始错误优先抛回调用方。
+      if (typeof deps.removeUserTheme === "function" && typeof created?.id === "string") {
+        try {
+          await deps.removeUserTheme({ id: created.id });
+        } catch (cleanupError) {
+          await safeLog(deps.logger, "warn", "user_theme_publish_cleanup_failed", cleanupError);
+        }
+      }
+      throw error;
+    }
   };
 
   const deleteUserTheme = async ({
@@ -1955,6 +1980,7 @@ export function createSkinController(input) {
     tick,
     setPersistence: setPersistencePublic,
     setThemeSelection: setThemeSelectionPublic,
+    pendingTransition: () => deps.readTransition(),
     pause,
     resume,
     restore,

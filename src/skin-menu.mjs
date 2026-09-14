@@ -23,6 +23,11 @@ export const CSS_SENTINELS = {
   text: "#0a0b0c",
 };
 
+// 缺省文案 = Codex 原字。任何没显式传的调用路径，菜单文案跟改造前一字不差。
+const DEFAULT_APPEARANCE_HELP =
+  "字体颜色显示不对？这通常是 Codex 本体的外观配色不匹配。点击左下角头像👉设置👉外观👉选择 浅色/深色 主题✅即可。";
+const DEFAULT_NATIVE_LABEL = "原生 Codex";
+
 function normalizeControl(control) {
   if (control === undefined || control === null) return null;
   if (typeof control !== "object" || Array.isArray(control)) {
@@ -77,6 +82,8 @@ export function buildSkinMenuScript({
   cssTemplate = "",
   preferStored = false,
   control = null,
+  appearanceHelp = DEFAULT_APPEARANCE_HELP,
+  nativeLabel = DEFAULT_NATIVE_LABEL,
 }) {
   if (!Array.isArray(entries) || entries.length === 0) {
     throw new Error("皮肤菜单至少需要一个主题");
@@ -130,6 +137,13 @@ export function buildSkinMenuScript({
     styleId,
     menuId,
     currentVersion,
+    // 宿主相关的两句文案由产品档案给，默认值保持 Codex 原字
+    appearanceHelp: typeof appearanceHelp === "string" && appearanceHelp
+      ? appearanceHelp
+      : DEFAULT_APPEARANCE_HELP,
+    nativeLabel: typeof nativeLabel === "string" && nativeLabel
+      ? nativeLabel
+      : DEFAULT_NATIVE_LABEL,
     activeId,
     themes,
     cssTemplate,
@@ -382,7 +396,7 @@ export function buildSkinMenuScript({
   appearanceHelp.dataset.heigeRole = "appearance-help";
   appearanceHelp.setAttribute("role", "note");
   appearanceHelp.setAttribute("aria-label", "字体颜色显示异常处理");
-  appearanceHelp.textContent = "字体颜色显示不对？这通常是 Codex 本体的外观配色不匹配。点击左下角头像👉设置👉外观👉选择 浅色/深色 主题✅即可。";
+  appearanceHelp.textContent = data.appearanceHelp;
   const quickActions = document.createElement("section");
   quickActions.dataset.heigeRole = "quick-actions";
   const customSection = document.createElement("section");
@@ -995,7 +1009,7 @@ export function buildSkinMenuScript({
       : "linear-gradient(90deg,rgba(7,28,52,.84),rgba(7,28,52,.18)),url("
         + JSON.stringify(preview) + ")";
     heroName.textContent = theme?.name
-      ?? (custom ? custom?.name ?? "我的主题" : "原生 Codex");
+      ?? (custom ? custom?.name ?? "我的主题" : data.nativeLabel);
     for (const [id, card] of rows) {
       const selected = id === themeId || (themeId === data.nativeSel && id === null);
       card.setAttribute("aria-pressed", String(selected));
@@ -1746,9 +1760,8 @@ export function buildSkinMenuScript({
         clearControlRequest();
       }
       controlRequest = request;
-      // Windows 首次开启常驻需完成计划任务注册、Store 身份复核和后台握手；
-      // 冷启动可超过 60s，不能在权威事务仍进行时先误报「未确认」。
-      const fallbackTimeoutMs = request.action === "set-persistence" ? 90_000 : 60_000;
+      // 常驻 CDP 兜底不宜拖太久；主题 / 用户主题发布仍保留较长窗口。
+      const fallbackTimeoutMs = request.action === "set-persistence" ? 20_000 : 60_000;
       controlRequestTimeout = later(() => {
         if (controlRequest?.requestId !== request.requestId) return;
         const timedOut = controlRequest;
@@ -2106,13 +2119,6 @@ export function buildSkinMenuScript({
     const requestPersistence = async (target, restoreFocus = false) => {
       assertCurrent();
       if (pending || target === persistenceEnabled) return;
-      if (
-        themePending ||
-        (controlRequest !== null && controlRequest.action !== "set-persistence")
-      ) {
-        showAlert("正在保存启动器主题，请稍候后再修改皮肤常驻。", "success");
-        return;
-      }
       const previousEnabled = persistenceEnabled;
       const requestRevision = controlRevision;
       const fallbackRequest = {
@@ -2133,8 +2139,8 @@ export function buildSkinMenuScript({
       hideAlert();
       paintPersistence();
       const abortController = childController();
-      // 开启常驻含计划任务注册与握手（默认 10s）；3s 会误超时并排队 CDP，掩盖 BACKGROUND_START_FAILED。
-      const timeoutId = later(() => abortController.abort(), 15000);
+      // 开启常驻含计划任务注册与握手（Windows 35s）；15s 会在握手完成前 abort，排队 CDP 并误杀会话控制器。
+      const timeoutId = later(() => abortController.abort(), 45000);
       try {
         const response = await fetch(data.control.endpoint, {
           method: "POST",
@@ -2237,13 +2243,6 @@ export function buildSkinMenuScript({
     const activatePersistenceSwitch = () => {
       assertCurrent();
       if (pending) return;
-      if (
-        themePending ||
-        (controlRequest !== null && controlRequest.action !== "set-persistence")
-      ) {
-        showAlert("正在保存启动器主题，请稍候后再修改皮肤常驻。", "success");
-        return;
-      }
       if (persistenceEnabled) {
         hideAlert();
         confirmation.hidden = false;

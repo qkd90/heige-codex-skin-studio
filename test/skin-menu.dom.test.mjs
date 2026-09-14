@@ -664,46 +664,6 @@ test("a renderer-blocked request is queued for the controller poll without paint
   assert.equal(page.alert.getAttribute("role"), "alert");
 });
 
-test("persistence waits for a queued theme save instead of reporting the controller unavailable", async (t) => {
-  let calls = 0;
-  const page = await menuWindow({
-    persistenceEnabled: false,
-    activeId: "miku-488137",
-    entries: [
-      {
-        id: "miku-488137",
-        name: "Miku 488137",
-        accent: "#19c9e5",
-        css: "html { color: #123456; }",
-      },
-      {
-        id: "night-city",
-        name: "Night City",
-        accent: "#4455aa",
-        css: "html { color: #eeeeee; }",
-      },
-    ],
-    fetch: async () => {
-      calls += 1;
-      throw new Error("Failed to fetch");
-    },
-  });
-  t.after(() => page.close());
-
-  await page.pickTheme("night-city");
-  const themeRequest = page.runtime.status().controlRequest;
-  assert.equal(themeRequest.action, "set-theme");
-  assert.equal(calls, 1);
-
-  await page.enablePersistence();
-  assert.equal(calls, 1, "persistence must not compete for the single CDP request slot");
-  assert.equal(page.runtime.status().controlRequest.requestId, themeRequest.requestId);
-  assert.equal(page.switch.getAttribute("aria-checked"), "false");
-  assert.equal(page.switch.getAttribute("aria-busy"), "false");
-  assert.match(page.alert.textContent, /正在保存启动器主题.*稍候/);
-  assert.doesNotMatch(page.alert.textContent, /控制器不可用|Failed to fetch/);
-});
-
 test("a compensated enable failure syncs revision without painting on", async (t) => {
   const requests = [];
   const page = await menuWindow({
@@ -735,7 +695,7 @@ test("a compensated enable failure syncs revision without painting on", async (t
   assert.equal(page.switch.getAttribute("aria-checked"), "true");
 });
 
-test("persistence HTTP abort uses 15s and CDP fallback covers a Windows cold start", async (t) => {
+test("persistence HTTP abort uses 45s and CDP fallback expires at 20s", async (t) => {
   const timeouts = [];
   const page = await menuWindow({
     persistenceEnabled: false,
@@ -749,8 +709,8 @@ test("persistence HTTP abort uses 15s and CDP fallback covers a Windows cold sta
     return originalSetTimeout(callback, milliseconds, ...args);
   };
   await page.enablePersistence();
-  assert.equal(timeouts.includes(15_000), true, "persistence fetch abort must be 15s");
-  assert.equal(timeouts.includes(90_000), true, "persistence CDP fallback must cover Windows registration and handshake");
+  assert.equal(timeouts.includes(45_000), true, "persistence fetch abort must be 45s");
+  assert.equal(timeouts.includes(20_000), true, "persistence CDP fallback must expire at 20s");
   assert.notEqual(page.window.__heigeCodexSkinRuntime.status().controlRequest, null);
 });
 

@@ -80,6 +80,12 @@
       "exclude": []
     },
     {
+      "source": "src/launcher-panel-state.mjs",
+      "destination": "payload/src/launcher-panel-state.mjs",
+      "recursive": false,
+      "exclude": []
+    },
+    {
       "source": "src/legacy-migration-coordinator.mjs",
       "destination": "payload/src/legacy-migration-coordinator.mjs",
       "recursive": false,
@@ -112,6 +118,12 @@
     {
       "source": "src/macos-launch-agent.mjs",
       "destination": "payload/src/macos-launch-agent.mjs",
+      "recursive": false,
+      "exclude": []
+    },
+    {
+      "source": "src/macos-launcher-recovery.mjs",
+      "destination": "payload/src/macos-launcher-recovery.mjs",
       "recursive": false,
       "exclude": []
     },
@@ -152,8 +164,20 @@
       "exclude": []
     },
     {
+      "source": "src/products.mjs",
+      "destination": "payload/src/products.mjs",
+      "recursive": false,
+      "exclude": []
+    },
+    {
       "source": "src/resource-limits.mjs",
       "destination": "payload/src/resource-limits.mjs",
+      "recursive": false,
+      "exclude": []
+    },
+    {
+      "source": "src/skin-css-workbuddy.mjs",
+      "destination": "payload/src/skin-css-workbuddy.mjs",
       "recursive": false,
       "exclude": []
     },
@@ -221,6 +245,18 @@
       "source": "src/windows-secure-fs.mjs",
       "destination": "payload/src/windows-secure-fs.mjs",
       "recursive": false,
+      "exclude": []
+    },
+    {
+      "source": "assets/launcher",
+      "destination": "payload/assets/launcher",
+      "recursive": true,
+      "exclude": []
+    },
+    {
+      "source": "native/macos-launcher",
+      "destination": "payload/native/macos-launcher",
+      "recursive": true,
       "exclude": []
     },
     {

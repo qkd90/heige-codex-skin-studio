@@ -71,6 +71,9 @@ function lifecycleDeps(overrides = {}) {
     controller: [],
     createController: [],
     detached: [],
+    lifecycleActions: [],
+    launcherLock: [],
+    launcherLogs: [],
     offlineDisable: [],
     migrate: [],
     preflight: [],
@@ -78,9 +81,18 @@ function lifecycleDeps(overrides = {}) {
     runController: [],
   };
   const controller = {
-    pause: async () => ({ mode: "paused" }),
-    resume: async () => ({ mode: "active" }),
-    restore: async () => ({ mode: "restoring", persistenceEnabled: false }),
+    pause: async () => {
+      calls.lifecycleActions.push("pause");
+      return { mode: "paused" };
+    },
+    resume: async () => {
+      calls.lifecycleActions.push("resume");
+      return { mode: "active" };
+    },
+    restore: async () => {
+      calls.lifecycleActions.push("restore");
+      return { mode: "restoring", persistenceEnabled: false };
+    },
     setPersistence: async ({ expectedRevision, enabled }) => {
       calls.controller.push({ expectedRevision, enabled });
       state = { ...state, persistenceEnabled: enabled, revision: state.revision + 1 };
@@ -123,6 +135,14 @@ function lifecycleDeps(overrides = {}) {
     restartDetached: async (input) => {
       calls.detached.push(structuredClone(input));
       return { queued: true };
+    },
+    ensureLauncherOperationLock: async (input) => {
+      calls.launcherLock.push(structuredClone(input));
+      return { recovered: false };
+    },
+    logLauncherError: async (error) => {
+      calls.launcherLogs.push({ code: error?.code ?? null, message: error?.message ?? String(error) });
+      return true;
     },
     offlineDisablePersistence: async (input) => {
       calls.offlineDisable.push(structuredClone(input));
@@ -364,6 +384,44 @@ test("rejects unknown commands and missing options", async () => {
   await assert.rejects(() => runCli(["launch"], deps()), /未知命令/);
 });
 
+test("--app 闸门：未知产品拒绝，WorkBuddy 拒常驻但放行只读命令", async () => {
+  await assert.rejects(() => runCli(["list", "--app", "cursor"], deps()), /--app 只能是 codex 或 workbuddy/);
+  // 常驻开关走 renderer 回调控制服务，WorkBuddy 的 file:// renderer 发的是 Origin: null，
+  // 放行等于掏空 CSRF 校验，所以两个方向的 set-persistence 都必须明确报错而不是悄悄降级
+  for (const flag of ["true", "false"]) {
+    await assert.rejects(
+      () => runCli(["set-persistence", flag, "--app", "workbuddy"], deps()),
+      /WorkBuddy 这一版只支持一次性皮肤（apply \/ enable-skin \/ restore），暂不支持常驻/,
+    );
+  }
+  // 只读命令不碰宿主进程，--app workbuddy 必须照常工作
+  assert.deepEqual(await runCli(["list", "--app", "workbuddy"], deps()), [
+    { id: "miku-488137", name: "Miku", path: "/bundle/themes/miku-488137" },
+  ]);
+});
+
+test("HEIGE_SKIN_APP 环境变量是 --app 的回退，命令行显式值优先", async () => {
+  const saved = process.env.HEIGE_SKIN_APP;
+  try {
+    process.env.HEIGE_SKIN_APP = "workbuddy";
+    await assert.rejects(
+      () => runCli(["set-persistence", "false"], deps()),
+      /暂不支持常驻/,
+    );
+    // 显式 --app codex 盖过环境变量，Codex 的常驻路径不受影响
+    const fx = lifecycleDeps();
+    assert.deepEqual(await runCli(["set-persistence", "false", "--app", "codex"], fx.deps), {
+      persistenceEnabled: false,
+      revision: 6,
+    });
+    process.env.HEIGE_SKIN_APP = "cursor";
+    await assert.rejects(() => runCli(["list"], deps()), /--app 只能是/);
+  } finally {
+    if (saved === undefined) delete process.env.HEIGE_SKIN_APP;
+    else process.env.HEIGE_SKIN_APP = saved;
+  }
+});
+
 test("running through a bin symlink still executes instead of silently no-op", async () => {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
@@ -408,10 +466,61 @@ test("Windows CLI help directs session lifecycle work to PowerShell or batch wra
   assert.match(help.lifecycleContract, /scripts\/windows\/apply\.ps1/);
   assert.match(help.lifecycleContract, /scripts\/windows\/enable-skin\.bat/);
   assert.match(help.lifecycleContract, /scripts\/windows\/restore\.ps1/);
-  assert.match(help.lifecycleContract, /scripts\/windows\/close-codex\.ps1/);
-  assert.match(help.lifecycleContract, /scripts\/windows\/close-codex\.bat/);
+  assert.match(help.lifecycleContract, /scripts\/windows\/enable-loopback\.ps1/);
+  assert.match(help.lifecycleContract, /scripts\/windows\/enable-loopback\.bat/);
   assert.match(help.lifecycleContract, /scripts\/windows\/uninstall\.ps1/);
   assert.match(help.lifecycleContract, /scripts\/windows\/uninstall\.bat/);
+});
+
+test("Windows doctor decouples debug flags from HTTP reachability and reports loopback isolation", async () => {
+  const storeRoot = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.0.0.0_x64__abc";
+  const snapshot = validateWindowsRuntimeSnapshot({
+    schemaVersion: 1,
+    app: {
+      kind: "StoreAumid",
+      executablePath: null,
+      installPath: storeRoot,
+      productName: "Codex",
+      packageFullName: "OpenAI.Codex_1.0.0.0_x64__abc",
+      aumid: "OpenAI.Codex_abc!App",
+      launchTarget: "aumid:OpenAI.Codex_abc!App",
+    },
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+    processes: [{
+      pid: 4242,
+      parentProcessId: 100,
+      executablePath: `${storeRoot}\\ChatGPT.exe`,
+      startedAt: "2026-07-17T08:00:00.0000000Z",
+    }],
+    listeners: [{
+      pid: 4242,
+      executablePath: `${storeRoot}\\ChatGPT.exe`,
+      startedAt: "2026-07-17T08:00:00.0000000Z",
+      processName: "chatgpt",
+      localAddress: "127.0.0.1",
+      localPort: 9341,
+    }],
+  });
+  const result = await runCli(["doctor", "--port", "9341"], {
+    platform: "win32",
+    queryWindowsRuntime: async () => snapshot,
+    runtimeDiagnostics: async () => ({
+      appVersion: "26.727.6591.0",
+      processRunning: true,
+      processHasDebugFlag: true,
+      portOpen: false,
+      portBrowser: null,
+    }),
+    queryWindowsLoopbackExempt: async ({ packageFamilyName }) => {
+      assert.equal(packageFamilyName, "OpenAI.Codex_abc");
+      return false;
+    },
+  });
+  assert.equal(result.processHasDebugFlag, true);
+  assert.equal(result.portOpen, false);
+  assert.equal(result.loopbackExempt, false);
+  assert.equal(result.loopbackIsolated, true);
+  assert.match(result.diagnosis, /^loopback-isolated/);
 });
 
 test("apply validates everything and registers only an ephemeral current-session controller", async () => {
@@ -458,6 +567,251 @@ test("apply prefer-stored uses authoritative lastNonNative only when Theme is om
   const explicit = make();
   await runCli(["apply", "--prefer-stored", "--theme", "miku-488137"], explicit.deps);
   assert.equal(explicit.calls.registerEphemeral[0].themeId, "miku-488137");
+});
+
+test("launcher-apply binds the Bundle version, restores lastNonNative, and stays session-only", async () => {
+  const lastThemeId = "genshin-night";
+  const fx = lifecycleDeps({
+    initialState: {
+      schemaVersion: 2,
+      persistenceEnabled: false,
+      selectedThemeId: lastThemeId,
+      lastNonNativeThemeId: lastThemeId,
+      controlToken: Buffer.alloc(32, 30).toString("base64url"),
+      lastTransitionNonce: null,
+      revision: 5,
+    },
+    listThemes: async () => [
+      { id: "miku-488137", name: "Miku", path: "/bundle/themes/miku-488137" },
+      { id: lastThemeId, name: "Genshin", path: `/bundle/themes/${lastThemeId}` },
+    ],
+    readCurrentPackageVersion: async () => "5.5.4",
+  });
+
+  const result = await runCli([
+    "launcher-apply",
+    "--launcher-version",
+    "5.5.4",
+    "--port",
+    "9341",
+  ], fx.deps);
+
+  assert.deepEqual(result, { mode: "active", persistenceEnabled: false });
+  assert.equal(fx.calls.registerEphemeral.at(-1).themeId, lastThemeId);
+  assert.deepEqual(fx.calls.launcherLock, [{ port: 9341 }]);
+  assert.equal(fx.calls.controller.length, 0);
+  assert.equal(fx.state.persistenceEnabled, false);
+  await assert.rejects(
+    runCli(["launcher-apply", "--launcher-version", "5.5.3"], fx.deps),
+    /版本.*不匹配|重新运行安装器/,
+  );
+  assert.equal(fx.calls.launcherLogs.length, 1);
+  assert.match(fx.calls.launcherLogs[0].message, /5\.5\.3.*5\.5\.4/);
+});
+
+test("launcher-state returns the WorkBuddy card without probing its runtime port", async () => {
+  const discoveryCalls = [];
+  const result = await runCli(["launcher-state", "--app", "workbuddy"], deps({
+    platform: "darwin",
+    nodeVersion: "v22.14.0",
+    readState: async () => ({ lastNonNativeThemeId: "miku-488137" }),
+    discoverCodex: async (input) => {
+      discoveryCalls.push(input);
+      return {
+        appFound: true,
+        app: "/Applications/WorkBuddy.app",
+      };
+    },
+    listThemes: async () => [{
+      id: "miku-488137",
+      name: "Miku 488137",
+      path: "/bundle/themes/miku-488137",
+    }],
+  }));
+
+  assert.deepEqual(result, {
+    schemaVersion: 1,
+    product: "workbuddy",
+    productName: "WorkBuddy",
+    appInstalled: true,
+    appPath: "/Applications/WorkBuddy.app",
+    themeId: "miku-488137",
+    themeName: "Miku 488137",
+    mode: "one-shot",
+  });
+  assert.deepEqual(discoveryCalls, [{ product: "workbuddy" }]);
+});
+
+test("launcher-state rejects options outside its fixed product selector", async () => {
+  await assert.rejects(
+    runCli(["launcher-state", "--port", "9341"], deps()),
+    /无法识别的参数：--port/,
+  );
+});
+
+test("launcher-apply version-binds WorkBuddy while preserving one-shot semantics", async () => {
+  const fx = lifecycleDeps({
+    initialState: {
+      schemaVersion: 2,
+      persistenceEnabled: false,
+      selectedThemeId: "miku-488137",
+      lastNonNativeThemeId: "miku-488137",
+      controlToken: Buffer.alloc(32, 17).toString("base64url"),
+      lastTransitionNonce: null,
+      revision: 8,
+    },
+    readCurrentPackageVersion: async () => "5.5.10",
+  });
+
+  const result = await runCli([
+    "launcher-apply",
+    "--launcher-version",
+    "5.5.10",
+    "--app",
+    "workbuddy",
+    "--port",
+    "9342",
+  ], fx.deps);
+
+  assert.deepEqual(result, { mode: "active", persistenceEnabled: false });
+  assert.deepEqual(fx.calls.launcherLock, [{ port: 9342 }]);
+  assert.equal(fx.calls.registerEphemeral.at(-1).themeId, "miku-488137");
+  assert.equal(fx.calls.registerEphemeral.at(-1).preferStored, true);
+  assert.equal(fx.calls.controller.length, 0);
+});
+
+test("launcher-apply preserves its command identity across a native Codex restart", async () => {
+  const fx = lifecycleDeps({
+    readCurrentPackageVersion: async () => "5.5.4",
+    preflightLifecycle: async ({ requirePort }) => {
+      if (requirePort) {
+        const error = new Error("当前 Codex 是原生启动");
+        error.code = "CDP_NOT_OWNED";
+        throw error;
+      }
+      return {
+        appPath: "/Applications/ChatGPT.app",
+        nodePath: "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node",
+        process: {
+          pid: 5252,
+          executablePath: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          startedAt: "Fri Jul 17 09:00:00 2026",
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(await runCli([
+    "launcher-apply",
+    "--launcher-version",
+    "5.5.4",
+  ], fx.deps), {
+    mode: "restarting",
+    persistenceEnabled: false,
+    queued: true,
+  });
+  assert.deepEqual(fx.calls.detached.at(-1).afterLaunch, {
+    command: "launcher-apply",
+    launcherVersion: "5.5.4",
+    themeId: "miku-488137",
+  });
+  assert.deepEqual(fx.calls.launcherLock, [{ port: 9341 }]);
+});
+
+test("launcher-close version-binds the product and pauses only the current skin session", async () => {
+  const fx = lifecycleDeps({
+    readCurrentPackageVersion: async () => "5.5.13",
+    initialState: {
+      schemaVersion: 2,
+      persistenceEnabled: true,
+      selectedThemeId: "genshin-night",
+      lastNonNativeThemeId: "genshin-night",
+      controlToken: Buffer.alloc(32, 44).toString("base64url"),
+      lastTransitionNonce: null,
+      revision: 7,
+    },
+  });
+
+  assert.deepEqual(await runCli([
+    "launcher-close",
+    "--launcher-version",
+    "5.5.13",
+    "--app",
+    "workbuddy",
+    "--port",
+    "9342",
+  ], fx.deps), { mode: "paused" });
+  assert.deepEqual(fx.calls.launcherLock, [{ port: 9342 }]);
+  assert.deepEqual(fx.calls.lifecycleActions, ["pause"]);
+  assert.equal(fx.calls.preflight.at(-1).command, "launcher-close");
+  assert.equal(fx.calls.preflight.at(-1).requirePort, true);
+  assert.equal(fx.state.persistenceEnabled, true);
+  assert.equal(fx.state.lastNonNativeThemeId, "genshin-night");
+
+  await assert.rejects(
+    runCli(["launcher-close", "--launcher-version", "5.5.12"], fx.deps),
+    /版本.*不匹配|重新运行安装器/,
+  );
+});
+
+test("launcher-close is idempotent when the product already has no owned skin port", async () => {
+  const fx = lifecycleDeps({
+    readCurrentPackageVersion: async () => "5.5.13",
+    preflightLifecycle: async () => {
+      const error = new Error("当前产品已经是原生界面");
+      error.code = "CDP_NOT_OWNED";
+      throw error;
+    },
+  });
+
+  assert.deepEqual(await runCli([
+    "launcher-close",
+    "--launcher-version",
+    "5.5.13",
+  ], fx.deps), { mode: "closed" });
+  assert.deepEqual(fx.calls.lifecycleActions, []);
+  assert.equal(fx.calls.createController.length, 0);
+});
+
+test("launcher-repair force-restarts and resumes through the version-bound launcher command", async () => {
+  const fx = lifecycleDeps({
+    readCurrentPackageVersion: async () => "5.5.13",
+    initialState: {
+      schemaVersion: 2,
+      persistenceEnabled: false,
+      selectedThemeId: "genshin-night",
+      lastNonNativeThemeId: "genshin-night",
+      controlToken: Buffer.alloc(32, 45).toString("base64url"),
+      lastTransitionNonce: null,
+      revision: 9,
+    },
+    listThemes: async () => [
+      { id: "miku-488137", name: "Miku", path: "/bundle/themes/miku-488137" },
+      { id: "genshin-night", name: "Genshin", path: "/bundle/themes/genshin-night" },
+    ],
+  });
+
+  assert.deepEqual(await runCli([
+    "launcher-repair",
+    "--launcher-version",
+    "5.5.13",
+    "--port",
+    "9341",
+  ], fx.deps), {
+    mode: "restarting",
+    persistenceEnabled: false,
+    queued: true,
+  });
+  assert.deepEqual(fx.calls.launcherLock, [{ port: 9341 }]);
+  assert.equal(fx.calls.registerEphemeral.length, 0);
+  assert.equal(fx.calls.preflight.at(-1).command, "launcher-repair");
+  assert.deepEqual(fx.calls.detached.at(-1).afterLaunch, {
+    command: "launcher-apply",
+    launcherVersion: "5.5.13",
+    themeId: "genshin-night",
+  });
+  assert.equal(fx.state.persistenceEnabled, false);
+  assert.equal(fx.state.lastNonNativeThemeId, "genshin-night");
 });
 
 test("launcher restores the last theme after a native restart and CLI cannot re-enable persistence", async () => {
@@ -2385,6 +2739,81 @@ test("ephemeral controller observes an externally enabled state, repairs backgro
   ]);
 });
 
+test("ephemeral does not hand off while an enable journal is still pending", async () => {
+  const events = [];
+  let ticks = 0;
+  const result = await runControllerProcess({
+    start: async () => ({
+      action: "idle",
+      mode: "active",
+      persistenceEnabled: false,
+      revision: 1,
+    }),
+    pendingTransition: async () => ({
+      operation: "enable-persistence",
+      stage: "session-committed",
+    }),
+    setPersistence: async (input) => {
+      events.push(["set", input]);
+      return { persistenceEnabled: true, revision: 2 };
+    },
+    tick: async () => {
+      ticks += 1;
+      if (ticks >= 2) {
+        return { action: "unregister", mode: "native", persistenceEnabled: false, revision: 1 };
+      }
+      return {
+        action: "idle",
+        mode: "active",
+        persistenceEnabled: true,
+        revision: 2,
+      };
+    },
+    stop: async () => events.push("stop"),
+  }, {
+    ephemeralRuntime: true,
+    paths: { stateRoot: "/private/state" },
+    wait: async () => {},
+  });
+  assert.equal(result.action, "unregister");
+  assert.deepEqual(events, ["stop"]);
+  assert.equal(ticks, 2);
+});
+
+test("ephemeral keeps the session controller when background handoff fails", async () => {
+  let ticks = 0;
+  const events = [];
+  const result = await runControllerProcess({
+    start: async () => ({
+      action: "inject",
+      mode: "active",
+      persistenceEnabled: true,
+      revision: 9,
+    }),
+    setPersistence: async () => {
+      events.push("set");
+      const error = new Error("后台控制器启动失败，常驻仍为关闭");
+      error.code = "BACKGROUND_START_FAILED";
+      throw error;
+    },
+    tick: async () => {
+      ticks += 1;
+      if (ticks >= 2) {
+        return { action: "unregister", mode: "native", persistenceEnabled: false, revision: 9 };
+      }
+      return { action: "idle", mode: "active", persistenceEnabled: false, revision: 9 };
+    },
+    stop: async () => events.push("stop"),
+  }, {
+    ephemeralRuntime: true,
+    paths: { stateRoot: "/private/state" },
+    wait: async () => {},
+  });
+  assert.equal(result.action, "unregister");
+  assert.deepEqual(events, ["set", "stop"]);
+  assert.equal(ticks, 2);
+});
+
 test("HTTP enable hands the live renderer endpoint to the exact background before the next ephemeral tick", async (t) => {
   const fx = createEphemeralHandoffHarness({ persistenceEnabled: false, revision: 1 });
   t.after(() => fx.close());
@@ -2883,94 +3312,6 @@ test("production preflight binds the Windows platform to the trusted runtime sna
     process: null,
   });
   assert.deepEqual(calls, [{ port: 9341 }]);
-});
-
-test("Windows production preflight resamples a transient ambiguous process graph", async () => {
-  const executablePath = "C:\\Program Files\\Codex\\Codex.exe";
-  const base = {
-    schemaVersion: 1,
-    app: {
-      kind: "Win32",
-      executablePath,
-      installPath: "C:\\Program Files\\Codex",
-      productName: "Codex",
-      packageFullName: null,
-      aumid: null,
-      launchTarget: executablePath,
-    },
-    nodePath: "C:\\Program Files\\nodejs\\node.exe",
-    listeners: [],
-  };
-  const startedAt = "2026-07-17T08:00:00.0000000Z";
-  const snapshots = [
-    {
-      ...base,
-      processes: [
-        { pid: 4101, parentProcessId: 100, executablePath, startedAt },
-        { pid: 4102, parentProcessId: 200, executablePath, startedAt },
-      ],
-    },
-    {
-      ...base,
-      processes: [{ pid: 4101, parentProcessId: 100, executablePath, startedAt }],
-    },
-  ];
-  const delays = [];
-  const result = await productionPreflight({
-    port: 9341,
-    requirePort: false,
-    platform: "win32",
-    dependencies: {
-      queryWindowsRuntime: async () => snapshots.shift(),
-      waitForWindowsSnapshotRetry: async (milliseconds) => { delays.push(milliseconds); },
-    },
-  });
-  assert.deepEqual(result.process, { pid: 4101, executablePath, startedAt });
-  assert.deepEqual(delays, [100]);
-  assert.equal(snapshots.length, 0);
-});
-
-test("Windows production preflight still rejects persistent ambiguous process graphs", async () => {
-  const executablePath = "C:\\Program Files\\Codex\\Codex.exe";
-  const ambiguous = {
-    schemaVersion: 1,
-    app: {
-      kind: "Win32",
-      executablePath,
-      installPath: "C:\\Program Files\\Codex",
-      productName: "Codex",
-      packageFullName: null,
-      aumid: null,
-      launchTarget: executablePath,
-    },
-    nodePath: "C:\\Program Files\\nodejs\\node.exe",
-    processes: [
-      {
-        pid: 4101,
-        parentProcessId: 100,
-        executablePath,
-        startedAt: "2026-07-17T08:00:00.0000000Z",
-      },
-      {
-        pid: 4102,
-        parentProcessId: 200,
-        executablePath,
-        startedAt: "2026-07-17T08:00:01.0000000Z",
-      },
-    ],
-    listeners: [],
-  };
-  let queries = 0;
-  await assert.rejects(productionPreflight({
-    port: 9341,
-    requirePort: false,
-    platform: "win32",
-    dependencies: {
-      queryWindowsRuntime: async () => { queries += 1; return ambiguous; },
-      waitForWindowsSnapshotRetry: async () => {},
-    },
-  }), (error) => error.code === "CODEX_PROCESS_AMBIGUOUS");
-  assert.equal(queries, 4);
 });
 
 test("Windows production controller probe keeps Store attribution and rejects a same-name foreign listener", async () => {

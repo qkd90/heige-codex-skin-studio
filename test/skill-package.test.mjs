@@ -210,8 +210,15 @@ test("archive is a strict runtime allowlist with fixed metadata", async (t) => {
     "heige-codex-skin-studio/payload/src/cli.mjs",
     "heige-codex-skin-studio/payload/src/update-check.mjs",
     "heige-codex-skin-studio/payload/src/lifecycle-helper.mjs",
+    "heige-codex-skin-studio/payload/src/macos-launcher-recovery.mjs",
     "heige-codex-skin-studio/payload/src/macos-launcher.mjs",
     "heige-codex-skin-studio/payload/src/theme-center-style.mjs",
+    "heige-codex-skin-studio/payload/assets/launcher/AppIcon.icns",
+    "heige-codex-skin-studio/payload/assets/launcher/LauncherLogo.png",
+    "heige-codex-skin-studio/payload/assets/launcher/miku-launcher-icon.png",
+    "heige-codex-skin-studio/payload/scripts/launch-skin.command",
+    "heige-codex-skin-studio/payload/scripts/close-skin.command",
+    "heige-codex-skin-studio/payload/scripts/repair-skin.command",
     "heige-codex-skin-studio/payload/scripts/enable-skin.command",
     "heige-codex-skin-studio/payload/scripts/resume.command",
     "heige-codex-skin-studio/payload/scripts/windows/install.bat",
@@ -220,6 +227,8 @@ test("archive is a strict runtime allowlist with fixed metadata", async (t) => {
     "heige-codex-skin-studio/payload/scripts/windows/restore.ps1",
     "heige-codex-skin-studio/payload/scripts/windows/close-codex.bat",
     "heige-codex-skin-studio/payload/scripts/windows/close-codex.ps1",
+    "heige-codex-skin-studio/payload/scripts/windows/enable-loopback.bat",
+    "heige-codex-skin-studio/payload/scripts/windows/enable-loopback.ps1",
     "heige-codex-skin-studio/payload/scripts/windows/uninstall.bat",
     "heige-codex-skin-studio/payload/scripts/windows/uninstall.ps1",
     "heige-codex-skin-studio/payload/scripts/windows/lib/entrypoints.ps1",
@@ -231,7 +240,10 @@ test("archive is a strict runtime allowlist with fixed metadata", async (t) => {
     names.some((name) => /\.before-|reports\/|package-skill|check-asset-provenance|sync-llms|update-release-hash|\.git\/|node_modules\/|test\//.test(name)),
     false,
   );
-  const executableArchiveEntry = (name) => /\.(?:command|zsh)$/.test(name);
+  const executableArchiveEntry = (name) => (
+    /\.(?:command|zsh)$/.test(name)
+    || name.endsWith("/payload/assets/launcher/HeiGeSkinLauncher.bin")
+  );
   for (const entry of entries) {
     assert.equal(entry.unixMtime, fixedEpoch, `fixed UTC mtime: ${entry.name}`);
     assert.equal(entry.dosTime, 0, `fixed UTC DOS time: ${entry.name}`);
@@ -267,6 +279,17 @@ test("archive is a strict runtime allowlist with fixed metadata", async (t) => {
   assert.match(packagedLauncher, /--restart/);
   assert.doesNotMatch(packagedLauncher, /\$\{1:-miku-488137\}/);
 
+  const packagedFinderLauncher = await readZipText(
+    archive,
+    "heige-codex-skin-studio/payload/scripts/launch-skin.command",
+  );
+  assert.equal(
+    packagedFinderLauncher,
+    await readFile(join(repoRoot, "scripts/launch-skin.command"), "utf8"),
+    "the reusable skill must carry the Finder launcher entrypoint byte-for-byte",
+  );
+  assert.match(packagedFinderLauncher, /launcher-apply[\s\S]*--launcher-version "\$VERSION"/);
+
   const packagedMacosLauncher = await readZipText(
     archive,
     "heige-codex-skin-studio/payload/src/macos-launcher.mjs",
@@ -276,15 +299,19 @@ test("archive is a strict runtime allowlist with fixed metadata", async (t) => {
     await readFile(join(repoRoot, "src/macos-launcher.mjs"), "utf8"),
     "the reusable skill must carry the audited macOS launcher byte-for-byte",
   );
-  assert.match(packagedMacosLauncher, /MACOS_LAUNCHER_SCHEMA_VERSION = 2/);
-  assert.match(packagedMacosLauncher, /const entrypoint = join\(scripts, "apply\.command"\);/);
+  assert.match(packagedMacosLauncher, /MACOS_LAUNCHER_SCHEMA_VERSION = 5/);
+  assert.match(packagedMacosLauncher, /LAUNCHER_LOGO_NAME = "LauncherLogo\.png"/);
+  assert.match(packagedMacosLauncher, /const entrypoint = join\(scripts, "launch-skin\.command"\);/);
 
   const packagedSkill = await readZipText(
     archive,
     "heige-codex-skin-studio/SKILL.md",
   );
-  assert.match(packagedSkill, /只会调用 `apply\.command`/);
-  assert.match(packagedSkill, /保持 `persistenceEnabled=false`/);
+  assert.match(
+    packagedSkill,
+    /打开、关闭和修复必须分别走版本绑定的 `launcher-apply`、`launcher-close`、`launcher-repair`/,
+  );
+  assert.match(packagedSkill, /关闭只暂停当前会话并保留最近主题和常驻选择/);
 });
 
 test("CLI requires exact explicit absolute output and epoch arguments", async (t) => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, posix, relative, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -55,6 +55,7 @@ import {
   unregisterControllerAgent,
   wakeControllerAgent,
 } from "./macos-launch-agent.mjs";
+import { ensureLauncherOperationLock as ensureMacosLauncherOperationLock } from "./macos-launcher-recovery.mjs";
 import {
   macosInstallJournalPath,
   readMacosInstallJournal,
@@ -84,6 +85,7 @@ import {
   writeStudioState,
 } from "./state-store.mjs";
 import { createStudioLogger } from "./studio-logger.mjs";
+import { buildLauncherPanelState } from "./launcher-panel-state.mjs";
 import { loadTheme } from "./theme-schema.mjs";
 import {
   createSingleImageTheme,
@@ -92,8 +94,10 @@ import {
   removeUserTheme as removeUserThemeFromStore,
   resolveAndLoadTheme,
 } from "./theme-store.mjs";
+import { DEFAULT_PRODUCT_ID, isProductId, PRODUCT_IDS, productProfile } from "./products.mjs";
 import {
   classifyWindowsPreflightSnapshot,
+  queryWindowsLoopbackExempt,
   queryWindowsRuntimeSnapshot,
   validateWindowsRuntimeSnapshot,
 } from "./windows-runtime.mjs";
@@ -104,19 +108,33 @@ import {
 
 const execFile = promisify(execFileCallback);
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BOOLEAN_FLAGS = new Set(["background", "ephemeral", "once", "prefer-stored", "restart"]);
+const BOOLEAN_FLAGS = new Set([
+  "background",
+  "ephemeral",
+  "install-authorization-stdin",
+  "once",
+  "prefer-stored",
+  "restart",
+]);
 const COMMAND_OPTIONS = new Map([
   ["help", new Set()],
-  ["list", new Set()],
-  ["create", new Set(["image", "name"])],
-  ["customize", new Set(["image", "name", "port"])],
-  ["apply", new Set(["port", "prefer-stored", "restart", "theme"])],
-  ["enable-skin", new Set(["port", "theme"])],
-  ["set-persistence", new Set(["port", "revision"])],
-  ["pause", new Set(["port"])],
-  ["resume", new Set(["port"])],
-  ["restore", new Set(["port"])],
+  // list / create 只碰主题目录不碰宿主进程，但用户主题目录按产品隔离，
+  // 所以同样收 --app（HEIGE_SKIN_APP 环境变量本来就对所有命令生效，白名单不该更窄）
+  ["list", new Set(["app"])],
+  ["create", new Set(["image", "name", "app"])],
+  ["customize", new Set(["image", "name", "port", "app"])],
+  ["apply", new Set(["port", "prefer-stored", "restart", "theme", "app"])],
+  ["launcher-apply", new Set(["launcher-version", "port", "theme", "app"])],
+  ["launcher-close", new Set(["launcher-version", "port", "app"])],
+  ["launcher-repair", new Set(["launcher-version", "port", "app"])],
+  ["launcher-state", new Set(["app"])],
+  ["enable-skin", new Set(["port", "theme", "app"])],
+  ["set-persistence", new Set(["app", "install-authorization-stdin", "port", "revision"])],
+  ["pause", new Set(["port", "app"])],
+  ["resume", new Set(["port", "app"])],
+  ["restore", new Set(["port", "app"])],
   ["controller", new Set([
+    "app",
     "background",
     "ephemeral",
     "once",
@@ -125,8 +143,8 @@ const COMMAND_OPTIONS = new Map([
     "state-directory",
     "task-name",
   ])],
-  ["status", new Set(["port"])],
-  ["doctor", new Set(["port"])],
+  ["status", new Set(["port", "app"])],
+  ["doctor", new Set(["port", "app"])],
   ["install-pet", new Set(["source"])],
 ]);
 const WINDOWS_PRODUCTION_TASK = "HeiGe Codex Skin Studio Controller";
@@ -211,8 +229,10 @@ function pathsAtStateRoot(base, stateRoot) {
   };
 }
 
-function controllerPaths({ platform, stateDirectory, taskName }) {
-  const base = resolveStudioPaths({ platform });
+function controllerPaths({ platform, stateDirectory, taskName, product = undefined }) {
+  // 常驻/临时 controller 的状态根必须跟着产品走，否则 WorkBuddy 的 controller
+  // 会去抢 Codex 的单例锁，表现成「已在运行」直接空转返回，皮肤一行都不注入
+  const base = resolveStudioPaths({ platform, product });
   if (stateDirectory === undefined) {
     if (platform === "win32" && typeof taskName === "string" && WINDOWS_TEST_TASK.test(taskName)) {
       throw new Error("Windows 隔离测试任务必须提供 --state-directory");
@@ -263,8 +283,17 @@ function windowsCliTestContext(platform, env = process.env) {
   return Object.freeze({ paths, taskName });
 }
 
-function portFrom(value) {
-  const port = value === undefined ? DEFAULT_CDP_PORT : Number(value);
+function productFrom(value, env = process.env) {
+  const selected = value ?? env.HEIGE_SKIN_APP;
+  if (selected === undefined || selected === null || selected === "") return "codex";
+  if (!isProductId(selected)) {
+    throw new Error(`--app 只能是 ${PRODUCT_IDS.join(" 或 ")}`);
+  }
+  return selected;
+}
+
+function portFrom(value, defaultPort = DEFAULT_CDP_PORT) {
+  const port = value === undefined ? defaultPort : Number(value);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error("--port 必须是 1024 到 65535 的整数");
   }
@@ -559,8 +588,10 @@ export async function productionPreflight({
   port,
   requirePort = true,
   platform = process.platform,
+  product = undefined,
   dependencies = {},
 } = {}) {
+  const profile = productProfile(product);
   if (platform === "win32") {
     const queryWindowsRuntime = dependencies.queryWindowsRuntime ?? ((input) =>
       queryWindowsRuntimeSnapshot({
@@ -568,39 +599,40 @@ export async function productionPreflight({
         powershellPath: windowsPowerShellPath(),
         commonScriptPath: join(repositoryRoot, "scripts", "windows", "lib", "common.ps1"),
       }));
-    const waitForSnapshotRetry = dependencies.waitForWindowsSnapshotRetry
-      ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const snapshot = await queryWindowsRuntime({ port });
-      try {
-        return classifyWindowsPreflightSnapshot(snapshot, { port, requirePort });
-      } catch (error) {
-        if (error?.code !== "CODEX_PROCESS_AMBIGUOUS" || attempt === 3) throw error;
-        await waitForSnapshotRetry(100 * (attempt + 1));
-      }
-    }
-    throw new Error("Windows runtime snapshot retry exhausted");
+    const snapshot = await queryWindowsRuntime({ port });
+    return classifyWindowsPreflightSnapshot(snapshot, { port, requirePort });
   }
   if (platform !== "darwin") throw new Error(`不支持的平台：${platform}`);
   const resolveMacApp = dependencies.resolveMacApp ?? resolveCodexApp;
   const listMacProcesses = dependencies.listMacProcesses ?? listCodexProcesses;
   const validateMacPortOwner = dependencies.validateMacPortOwner ?? validatePortOwner;
   const assertMacPortFree = dependencies.assertMacPortFree ?? assertMacPortIsFree;
-  const app = await resolveMacApp({ platform });
-  const processes = await listMacProcesses({ app });
-  const candidates = requirePort
-    ? processes.filter((entry) => entry.cdpPort === port)
-    : processes;
+  const app = await resolveMacApp({ platform, product: profile.id });
+  const processes = await listMacProcesses({ app, product: profile.id });
+  // Codex 的调试端口写在命令行里，直接按参数筛；WorkBuddy 走环境变量看不到，
+  // 只能反过来问「谁在监听这个端口」，逐个候选做端口归属校验。
+  const ownsPort = async (entry) => validateMacPortOwner(port, publicProcess(entry), { platform });
+  let candidates;
+  if (!requirePort) {
+    candidates = processes;
+  } else if (profile.cdpPortVisibleInArgs) {
+    candidates = processes.filter((entry) => entry.cdpPort === port);
+  } else {
+    candidates = [];
+    for (const entry of processes) {
+      if (await ownsPort(entry)) candidates.push(entry);
+    }
+  }
   if ((requirePort && candidates.length !== 1) || (!requirePort && candidates.length > 1)) {
     const error = new Error(requirePort
-      ? `端口不属于目标 Codex：${port}`
-      : "无法唯一识别当前 Codex 进程");
+      ? `端口不属于目标 ${profile.label}：${port}`
+      : `无法唯一识别当前 ${profile.label} 进程`);
     error.code = requirePort ? "CDP_NOT_OWNED" : "CODEX_PROCESS_AMBIGUOUS";
     throw error;
   }
   const processIdentity = candidates.length === 0 ? null : publicProcess(candidates[0]);
   if (requirePort && !(await validateMacPortOwner(port, processIdentity, { platform }))) {
-    const error = new Error(`端口不属于目标 Codex：${port}`);
+    const error = new Error(`端口不属于目标 ${profile.label}：${port}`);
     error.code = "CDP_NOT_OWNED";
     throw error;
   }
@@ -929,7 +961,7 @@ export function parseMacosInstallAuthorization(value) {
   try {
     parsed = JSON.parse(value);
   } catch (cause) {
-    throw new Error("HEIGE_MACOS_INSTALL_AUTHORIZATION is not valid JSON", { cause });
+    throw new Error("macOS install authorization is not valid JSON", { cause });
   }
   const keys = [
     "expectedControlToken",
@@ -955,7 +987,7 @@ export function parseMacosInstallAuthorization(value) {
     Buffer.from(parsed.expectedControlToken, "base64url").toString("base64url") !==
       parsed.expectedControlToken
   ) {
-    throw new Error("HEIGE_MACOS_INSTALL_AUTHORIZATION schema is invalid");
+    throw new Error("macOS install authorization schema is invalid");
   }
   return Object.freeze({ ...parsed });
 }
@@ -1470,24 +1502,39 @@ export async function productionController({
   const probeWindows = platform === "win32"
     ? createWindowsRuntimeProbe({ port, queryWindowsRuntime })
     : null;
+  const profile = productProfile(deps.product);
+  // 端口在命令行里可见就按参数筛；WorkBuddy 走环境变量看不到，只能问 lsof「谁在监听」
+  const ownsCdpPort = async (entry) => (
+    profile.cdpPortVisibleInArgs
+      ? entry.cdpPort === port
+      : entry.cdpPort === null && await validatePortOwner(port, publicProcess(entry), { platform })
+  );
   let lastKnownCdpPid = null;
   const probe = async () => {
     if (platform === "win32") return probeWindows();
-    const app = await resolveCodexApp({ platform });
+    const app = await resolveCodexApp({ platform, product: profile.id });
     // 快速路径：上次确认的 pid 仍指向同一 CDP 进程时，用单行 ps 代替全表扫描。
     // lstart+命令行双重校验由 parseCodexProcessTable 完成，身份漂移则落回全表。
     if (lastKnownCdpPid !== null) {
       try {
         const { stdout } = await execFile("/bin/ps", ["-p", String(lastKnownCdpPid), "-o", "pid=,lstart=,command="]);
-        const hit = parseCodexProcessTable(stdout, app)
-          .filter((entry) => entry.pid === lastKnownCdpPid && entry.cdpPort === port);
+        const rows = parseCodexProcessTable(stdout, app, { product: profile.id })
+          .filter((entry) => entry.pid === lastKnownCdpPid);
+        const hit = [];
+        for (const entry of rows) {
+          if (await ownsCdpPort(entry)) hit.push(entry);
+        }
         if (hit.length === 1) return publicProcess(hit[0]);
       } catch {}
       lastKnownCdpPid = null;
     }
-    const candidates = (await listCodexProcesses({ app })).filter((entry) => entry.cdpPort === port);
+    const processes = await listCodexProcesses({ app, product: profile.id });
+    const candidates = [];
+    for (const entry of processes) {
+      if (await ownsCdpPort(entry)) candidates.push(entry);
+    }
     if (candidates.length === 0) return null;
-    if (candidates.length !== 1) throw new Error("Codex 进程身份不唯一");
+    if (candidates.length !== 1) throw new Error(`${profile.label} 进程身份不唯一`);
     lastKnownCdpPid = candidates[0].pid;
     return publicProcess(candidates[0]);
   };
@@ -1499,11 +1546,19 @@ export async function productionController({
   });
   // 用户正常启动的 Codex 不带任何 CDP 端口，这正是常驻要接管的那一个。
   const probeNative = async () => {
-    const app = await resolveCodexApp({ platform });
-    const candidates = (await listCodexProcesses({ app }))
-      .filter((entry) => entry.cdpPort === null);
+    const app = await resolveCodexApp({ platform, product: profile.id });
+    const processes = await listCodexProcesses({ app, product: profile.id });
+    const candidates = [];
+    for (const entry of processes) {
+      // 「原生」= 完全没开调试端口的实例。命令行看得见端口就直接判 null；
+      // 看不见的（WorkBuddy）只能用「不监听我们这个端口」近似，别退化成「端口不等于 port」
+      const native = profile.cdpPortVisibleInArgs
+        ? entry.cdpPort === null
+        : !(await validatePortOwner(port, publicProcess(entry), { platform }));
+      if (native) candidates.push(entry);
+    }
     if (candidates.length === 0) return null;
-    if (candidates.length !== 1) throw new Error("Codex 原生进程身份不唯一");
+    if (candidates.length !== 1) throw new Error(`${profile.label} 原生进程身份不唯一`);
     return publicProcess(candidates[0]);
   };
   if (preflight?.process !== undefined && preflight.process !== null) {
@@ -1526,6 +1581,7 @@ export async function productionController({
   });
   return createSkinController({
     backgroundProcess: background,
+    supportsControlChannel: profile.supportsControlChannel,
     allowInternalPersistenceEnable:
       migrationAuthorization !== null || installAuthorization !== null,
     currentVersion,
@@ -1852,16 +1908,15 @@ export async function runControllerProcess(controller, {
     }
   }
   const handoffEphemeral = async (current) => {
-    let handedOff;
-    try {
-      handedOff = await controller.setPersistence({
-        expectedRevision: current.revision,
-        enabled: true,
-      });
-      await new Promise((resolve) => setImmediate(resolve));
-    } finally {
-      await controller.stop();
+    const handedOff = await controller.setPersistence({
+      expectedRevision: current.revision,
+      enabled: true,
+    });
+    if (handedOff?.persistenceEnabled !== true) {
+      throw new Error("ephemeral handoff did not confirm background persistence");
     }
+    await new Promise((resolve) => setImmediate(resolve));
+    await controller.stop();
     return {
       action: "handoff",
       mode: current.mode,
@@ -1869,9 +1924,27 @@ export async function runControllerProcess(controller, {
       revision: handedOff.revision,
     };
   };
-  if (ephemeralRuntime && result?.persistenceEnabled === true) {
-    return handoffEphemeral(result);
-  }
+  const pendingEnableJournal = async () => {
+    if (typeof controller.pendingTransition !== "function") return false;
+    try {
+      return await controller.pendingTransition() !== null;
+    } catch {
+      return false;
+    }
+  };
+  const tryHandoffEphemeral = async (current) => {
+    if (!ephemeralRuntime || current?.persistenceEnabled !== true) return null;
+    if (current.action === "error" || current.action === "unregister") return null;
+    if (await pendingEnableJournal()) return null;
+    try {
+      return await handoffEphemeral(current);
+    } catch {
+      // 常驻后台没起来时，会话控制器必须留下，否则主题中心 HTTP/CDP 都会空转超时。
+      return null;
+    }
+  };
+  const handedOffAtStart = await tryHandoffEphemeral(result);
+  if (handedOffAtStart !== null) return handedOffAtStart;
   if (once || result.action === "unregister" || result.action === "error") {
     await controller.stop();
     return result;
@@ -1884,9 +1957,8 @@ export async function runControllerProcess(controller, {
       await controller.stop();
       return result;
     }
-    if (ephemeralRuntime && result.persistenceEnabled === true) {
-      return handoffEphemeral(result);
-    }
+    const handedOff = await tryHandoffEphemeral(result);
+    if (handedOff !== null) return handedOff;
   }
 }
 
@@ -1932,6 +2004,44 @@ export async function waitForAppliedSkin({
   throw new Error("ephemeral controller 未确认皮肤已应用");
 }
 
+async function spawnWindowsSessionController({ nodePath, args }) {
+  const powershell = windowsPowerShellPath();
+  const identityToken = typeof process.env.HEIGE_WINDOWS_APP_IDENTITY === "string"
+    ? process.env.HEIGE_WINDOWS_APP_IDENTITY
+    : "";
+  const { stdout } = await execFile(powershell, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    join(repositoryRoot, "scripts", "windows", "start-session-controller.ps1"),
+    "-FilePath",
+    nodePath,
+    "-ArgumentsJson",
+    JSON.stringify(args),
+  ], {
+    env: {
+      ...isolatedWindowsPowerShellEnvironment(),
+      ...(identityToken ? { HEIGE_WINDOWS_APP_IDENTITY: identityToken } : {}),
+    },
+    timeout: 30_000,
+    windowsHide: true,
+  });
+  const text = String(stdout).trim();
+  if (text.length === 0) throw new Error("Windows session controller 未返回 PID");
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (cause) {
+    throw new Error("Windows session controller 返回了无效 JSON", { cause });
+  }
+  if (!Number.isSafeInteger(parsed?.Pid) || parsed.Pid <= 0) {
+    throw new Error("Windows session controller PID 无效");
+  }
+  return parsed;
+}
+
 async function productionRegisterEphemeral({ deps, paths, port, preflight, themeId }) {
   await ensureProductionState({
     paths,
@@ -1939,14 +2049,42 @@ async function productionRegisterEphemeral({ deps, paths, port, preflight, theme
     process: preflight.process,
     keepUntilProcessExit: true,
   });
-  const child = spawn(process.execPath, [
+  // 注入实际由这个子进程完成，产品必须跟着传下去，否则子进程按 Codex 认窗口、认路径。
+  // Codex 走默认值不加参数：它的 ephemeral 命令行是被真机验收当身份指纹核对的，一字不能动。
+  const profile = productProfile(deps.product);
+  // 没有控制通道的宿主：注完就退。常驻着反而会跟用户抢——用户在主题中心点了新主题，
+  // 页面里换好了，但没有回程通道告诉 controller，下一次健康巡检就把它按 state 里的旧主题改回去。
+  const oneShot = !profile.supportsControlChannel;
+  const controllerArgs = [
     fileURLToPath(import.meta.url),
     "controller",
     "--ephemeral",
     "--port",
     String(port),
-  ], { detached: true, stdio: "ignore" });
-  child.unref();
+    ...(profile.id === DEFAULT_PRODUCT_ID ? [] : ["--app", profile.id]),
+    ...(oneShot ? ["--once"] : []),
+  ];
+  if (process.platform === "win32") {
+    try {
+      await spawnWindowsSessionController({
+        nodePath: process.execPath,
+        args: controllerArgs,
+      });
+    } catch {
+      const child = spawn(process.execPath, controllerArgs, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      child.unref();
+    }
+  } else {
+    const child = spawn(process.execPath, controllerArgs, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  }
   await waitForAppliedSkin({ deps, port, themeId });
   return { mode: "active" };
 }
@@ -1995,6 +2133,9 @@ async function productionRestartDetached({
         nodePath: preflight.nodePath,
         port,
         themeId: afterLaunch.themeId,
+        ...(afterLaunch.command === "launcher-apply"
+          ? { launcherVersion: afterLaunch.launcherVersion }
+          : {}),
       },
   });
   return spawnDetachedLifecycle({
@@ -2550,10 +2691,19 @@ function defaults(overrides, {
   platform = process.platform,
   taskName,
   installAuthorization = null,
+  product = undefined,
 } = {}) {
-  const paths = overrides.paths ?? selectedPaths ?? resolveStudioPaths({ platform });
+  const profile = productProfile(product);
+  const paths = overrides.paths ?? selectedPaths ?? resolveStudioPaths({ platform, product: profile.id });
+  // 注入层的产品在这里一次性绑定，各命令不用自己传，测试注入的 overrides 仍然优先
+  const boundToProduct = (fn) => (input) => fn({ ...input, product: profile.id });
   const bundledThemesRoot = join(repositoryRoot, "themes");
   const roots = [bundledThemesRoot, paths.userThemesRoot];
+  const launcherLogger = createStudioLogger({
+    path: join(paths.stateRoot, "launcher.log"),
+    maxBytes: 256 * 1024,
+    backups: 2,
+  });
   const queryWindowsRuntime = overrides.queryWindowsRuntime ?? ((input) =>
     queryWindowsRuntimeSnapshot({
       ...input,
@@ -2573,21 +2723,32 @@ function defaults(overrides, {
     resolveAndLoadTheme,
     createSingleImageTheme,
     installPet,
-    applySkin,
-    removeSkin,
-    skinStatus,
-    deliverUpdateCheckResult,
-    deliverThemeSelectionResult,
+    product: profile.id,
+    applySkin: boundToProduct(applySkin),
+    removeSkin: boundToProduct(removeSkin),
+    skinStatus: boundToProduct(skinStatus),
+    deliverUpdateCheckResult: boundToProduct(deliverUpdateCheckResult),
+    deliverThemeSelectionResult: boundToProduct(deliverThemeSelectionResult),
     readCurrentPackageVersion,
     createCachedUpdateChecker,
     readState: () => readStudioState(paths.statePath),
     preflightLifecycle: (input) => productionPreflight({
       ...input,
       platform,
+      product: profile.id,
       dependencies: { queryWindowsRuntime },
     }),
     queryWindowsRuntime,
     chooseThemeInputs: productionChooseThemeInputs,
+    ensureLauncherOperationLock: (input) => ensureMacosLauncherOperationLock({
+      ...input,
+      paths,
+    }),
+    logLauncherError: (error) => launcherLogger.error("launcher.apply", error),
+    logLauncherRecovery: (result) => launcherLogger.warn(
+      "launcher.lock-recovered",
+      `backup=${result.backupPath ?? "unknown"} themes=${result.restoredThemes ?? 0}`,
+    ),
   };
   const merged = { ...base, ...overrides };
   merged.roots = [merged.bundledThemesRoot, merged.userThemesRoot];
@@ -2651,7 +2812,16 @@ async function preflightWithNativeFallback(deps, input) {
   }
 }
 
-async function applySelectedTheme({ deps, roots, command, port, preferStored, themeId, forceRestart = false }) {
+async function applySelectedTheme({
+  deps,
+  roots,
+  command,
+  port,
+  preferStored,
+  themeId,
+  forceRestart = false,
+  launcherVersion = null,
+}) {
   const bundle = await themeBundle({ deps, roots, themeId });
   const fallback = await preflightWithNativeFallback(deps, {
     command,
@@ -2665,12 +2835,19 @@ async function applySelectedTheme({ deps, roots, command, port, preferStored, th
   const before = await deps.readState();
   if (restartRequired) {
     assertDirectLifecycleRestartSupported(deps.platform, command);
+    const continuationCommand = command === "launcher-apply" || command === "launcher-repair"
+      ? "launcher-apply"
+      : "apply";
     const queued = await deps.restartDetached({
       launchMode: "cdp",
       port,
       preflight,
       themeId,
-      afterLaunch: { command: "apply", themeId },
+      afterLaunch: {
+        command: continuationCommand,
+        themeId,
+        ...(continuationCommand === "launcher-apply" ? { launcherVersion } : {}),
+      },
     });
     return {
       mode: "restarting",
@@ -2702,12 +2879,26 @@ async function withStoppedController(controller, action) {
 
 export async function runCli(argv, overrides = {}) {
   const { args, command, positionals } = parseInvocation(argv);
+  const productId = productFrom(args.app);
+  const profile = productProfile(productId);
+  // 常驻的开关按钮由 renderer 回调控制服务器完成，而控制服务器的来源校验只认 app://-。
+  // WorkBuddy 的 renderer 是 file://，跨源请求带的是 Origin: null，放行它等于削弱 CSRF 防线，
+  // 所以这一版明确拒绝常驻，而不是悄悄降级。
+  // controller 不在拒绝之列：apply 的注入本身就是靠 ephemeral controller 干的，
+  // 它只是不起控制服务（见 products.mjs 的 supportsControlChannel）。
+  if (!profile.supportsControlChannel && command === "set-persistence") {
+    throw new Error(`${profile.label} 这一版只支持一次性皮肤（apply / enable-skin / restore），暂不支持常驻`);
+  }
   const selectedControllerPlatform = command === "controller"
     ? controllerPlatform(args.platform)
-    : process.platform;
+    : (overrides.platform ?? process.platform);
+  // 安装授权只经 stdin 管道传递（--install-authorization-stdin），
+  // 不再走环境变量：同用户进程可用 ps eww / proc_pidinfo 读到 env。
   const installAuthorization = command === "controller"
     ? null
-    : parseMacosInstallAuthorization(process.env.HEIGE_MACOS_INSTALL_AUTHORIZATION);
+    : parseMacosInstallAuthorization(
+      args["install-authorization-stdin"] === true ? readFileSync(0, "utf8") : undefined,
+    );
   if (
     installAuthorization !== null &&
     (
@@ -2732,6 +2923,7 @@ export async function runCli(argv, overrides = {}) {
       platform: selectedControllerPlatform,
       stateDirectory: args["state-directory"],
       taskName: selectedTaskName,
+      product: productId,
     })
     : testContext?.paths;
   const deps = defaults(overrides, {
@@ -2739,6 +2931,7 @@ export async function runCli(argv, overrides = {}) {
     platform: selectedControllerPlatform,
     taskName: selectedTaskName,
     installAuthorization,
+    product: productId,
   });
   if (command === "help") {
     return {
@@ -2747,8 +2940,9 @@ export async function runCli(argv, overrides = {}) {
         ? "Windows 生命周期请使用 scripts/windows/apply.ps1 或 scripts/windows/apply.bat、" +
           "scripts/windows/enable-skin.ps1 或 scripts/windows/enable-skin.bat、" +
           "scripts/windows/pause.ps1、scripts/windows/resume.ps1、" +
-          "scripts/windows/restore.ps1 或 scripts/windows/restore.bat，以及 " +
-          "scripts/windows/close-codex.ps1 或 scripts/windows/close-codex.bat；完整卸载请使用 " +
+          "scripts/windows/restore.ps1 或 scripts/windows/restore.bat，" +
+          "scripts/windows/close-codex.ps1 或 scripts/windows/close-codex.bat，以及 " +
+          "scripts/windows/enable-loopback.ps1 或 scripts/windows/enable-loopback.bat；完整卸载请使用 " +
           "scripts/windows/uninstall.ps1 或 scripts/windows/uninstall.bat"
         : "macOS 生命周期请优先使用 scripts 下对应的 .command 稳定入口",
       commands: [
@@ -2756,6 +2950,7 @@ export async function runCli(argv, overrides = {}) {
         "create --image PATH --name NAME",
         "customize [--image PATH --name NAME]",
         "apply [--theme ID] [--port 9341]",
+        "launcher-state --app codex|workbuddy",
         "enable-skin [--theme ID] [--port 9341]",
         "set-persistence false [--revision N]",
         "pause",
@@ -2771,6 +2966,20 @@ export async function runCli(argv, overrides = {}) {
   assertNodeVersion(deps.nodeVersion);
   const roots = deps.roots;
 
+  if (command === "launcher-state") {
+    const [discovery, studioState, themes] = await Promise.all([
+      (deps.discoverCodex ?? discoverCodex)({ product: productId }),
+      deps.readState(),
+      deps.listThemes({ roots }),
+    ]);
+    return buildLauncherPanelState({
+      profile,
+      discovery,
+      studioState,
+      themes,
+      defaultThemeId: DEFAULT_THEME_ID,
+    });
+  }
   if (command === "list") return deps.listThemes({ roots });
   if (command === "create") {
     if (!args.image) throw new Error("create 需要 --image");
@@ -2799,7 +3008,7 @@ export async function runCli(argv, overrides = {}) {
       deps,
       roots,
       command: "customize",
-      port: portFrom(args.port),
+      port: portFrom(args.port, profile.defaultCdpPort),
       preferStored: false,
       themeId: created.id,
     });
@@ -2811,7 +3020,7 @@ export async function runCli(argv, overrides = {}) {
       ? await deps.readState()
       : null;
     const themeId = args.theme ?? stored?.lastNonNativeThemeId ?? DEFAULT_THEME_ID;
-    const port = portFrom(args.port);
+    const port = portFrom(args.port, profile.defaultCdpPort);
     return applySelectedTheme({
       deps,
       roots,
@@ -2822,10 +3031,57 @@ export async function runCli(argv, overrides = {}) {
       forceRestart: Boolean(args.restart),
     });
   }
+  if (["launcher-apply", "launcher-close", "launcher-repair"].includes(command)) {
+    try {
+      if (selectedControllerPlatform !== "darwin") {
+        throw new Error(`${command} 只支持 macOS 桌面产品`);
+      }
+      if (typeof args["launcher-version"] !== "string") {
+        throw new Error(`${command} 缺少 --launcher-version`);
+      }
+      const currentVersion = await deps.readCurrentPackageVersion();
+      if (args["launcher-version"] !== currentVersion) {
+        throw new Error(
+          `启动器版本 ${args["launcher-version"]} 与稳定运行时 ${currentVersion} 不匹配，请重新运行安装器`,
+        );
+      }
+      const port = portFrom(args.port, profile.defaultCdpPort);
+      const lockHealth = await deps.ensureLauncherOperationLock({ port });
+      if (lockHealth?.recovered === true) {
+        await deps.logLauncherRecovery(lockHealth).catch(() => false);
+      }
+      if (command === "launcher-close") {
+        let preflight;
+        try {
+          preflight = await deps.preflightLifecycle({ command, port, requirePort: true });
+        } catch (error) {
+          if (error?.code === "CDP_NOT_OWNED") return { mode: "closed" };
+          throw error;
+        }
+        const controller = await lifecycleController(deps, { port, preflight });
+        return await withStoppedController(controller, () => controller.pause());
+      }
+      const stored = args.theme === undefined ? await deps.readState() : null;
+      const themeId = args.theme ?? stored?.lastNonNativeThemeId ?? DEFAULT_THEME_ID;
+      return await applySelectedTheme({
+        deps,
+        roots,
+        command,
+        port,
+        preferStored: true,
+        themeId,
+        forceRestart: command === "launcher-repair",
+        launcherVersion: currentVersion,
+      });
+    } catch (error) {
+      await deps.logLauncherError(error).catch(() => false);
+      throw error;
+    }
+  }
   if (command === "enable-skin") {
     const stored = args.theme === undefined ? await deps.readState() : null;
     const themeId = args.theme ?? stored?.lastNonNativeThemeId ?? DEFAULT_THEME_ID;
-    const port = portFrom(args.port);
+    const port = portFrom(args.port, profile.defaultCdpPort);
     return applySelectedTheme({
       deps,
       roots,
@@ -2840,7 +3096,7 @@ export async function runCli(argv, overrides = {}) {
     if (enabled && installAuthorization === null) {
       throw new Error("常驻只能在 Codex 顶部菜单的「皮肤常驻」开关中开启；此命令仅支持 false");
     }
-    const port = portFrom(args.port);
+    const port = portFrom(args.port, profile.defaultCdpPort);
     const state = await deps.readState();
     if (state === null) {
       if (enabled) throw new Error("状态文件不存在，请先运行 apply");
@@ -2866,7 +3122,7 @@ export async function runCli(argv, overrides = {}) {
     }));
   }
   if (command === "restore") {
-    const port = portFrom(args.port);
+    const port = portFrom(args.port, profile.defaultCdpPort);
     const { preflight, restartRequired } = await preflightWithNativeFallback(deps, {
       command,
       port,
@@ -2885,7 +3141,7 @@ export async function runCli(argv, overrides = {}) {
     return result;
   }
   if (command === "pause" || command === "resume") {
-    const port = portFrom(args.port);
+    const port = portFrom(args.port, profile.defaultCdpPort);
     const preflight = await deps.preflightLifecycle({ command, port, requirePort: true });
     const controller = await lifecycleController(deps, { port, preflight });
     const result = await withStoppedController(controller, () => controller[command]());
@@ -2895,7 +3151,7 @@ export async function runCli(argv, overrides = {}) {
     if (args.background && args.ephemeral) {
       throw new Error("controller cannot be both background and ephemeral");
     }
-    const port = portFrom(args.port);
+    const port = portFrom(args.port, profile.defaultCdpPort);
     const startupHandshake = null;
     const ephemeralLease = args.ephemeral
       ? await acquireEphemeralControllerLease(deps.paths, selectedControllerPlatform)
@@ -2931,7 +3187,7 @@ export async function runCli(argv, overrides = {}) {
       await ephemeralLease?.release();
     }
   }
-  if (command === "status") return deps.skinStatus({ port: portFrom(args.port) });
+  if (command === "status") return deps.skinStatus({ port: portFrom(args.port, profile.defaultCdpPort) });
   if (command === "install-pet") {
     return deps.installPet({
       sourceRoot: args.source ?? join(repositoryRoot, "custom-pet/miku-future"),
@@ -2939,7 +3195,7 @@ export async function runCli(argv, overrides = {}) {
     });
   }
   if (command === "doctor") {
-    const selectedPort = portFrom(args.port);
+    const selectedPort = portFrom(args.port, profile.defaultCdpPort);
     if (selectedControllerPlatform === "win32") {
       const snapshot = validateWindowsRuntimeSnapshot(
         await deps.queryWindowsRuntime({ port: selectedPort }),
@@ -2956,12 +3212,49 @@ export async function runCli(argv, overrides = {}) {
           port: selectedPort,
           requirePort: true,
         });
+      const processRunning = (offline?.process ?? exact?.process ?? null) !== null;
+      const usingRuntimeFixture = deps.env?.HEIGE_TEST_WINDOWS_RUNTIME_FIXTURE !== undefined
+        || process.env.HEIGE_TEST_WINDOWS_RUNTIME_FIXTURE !== undefined;
+      let processHasDebugFlag = exact !== null;
+      let portOpen = exact !== null;
+      let portBrowser = null;
+      let appVersion = null;
+      if (!usingRuntimeFixture || typeof deps.runtimeDiagnostics === "function") {
+        const runtimeDiag = await (deps.runtimeDiagnostics ?? runtimeDiagnostics)({
+          platform: "win32",
+          port: selectedPort,
+          product: productId,
+          env: deps.env,
+          exec: deps.exec,
+          fetchImpl: deps.fetchImpl,
+        });
+        processHasDebugFlag = runtimeDiag.processHasDebugFlag;
+        portOpen = runtimeDiag.portOpen;
+        portBrowser = runtimeDiag.portBrowser;
+        appVersion = runtimeDiag.appVersion;
+      }
+      const store = snapshot.app.kind === "StoreAumid" || snapshot.app.kind === "StoreAlias";
+      let loopbackExempt = null;
+      if (store && typeof snapshot.app.aumid === "string") {
+        const bang = snapshot.app.aumid.lastIndexOf("!");
+        const packageFamilyName = bang > 0 ? snapshot.app.aumid.slice(0, bang) : snapshot.app.aumid;
+        loopbackExempt = await (deps.queryWindowsLoopbackExempt ?? queryWindowsLoopbackExempt)({
+          packageFamilyName,
+          env: deps.env ?? process.env,
+        });
+      }
+      const loopbackIsolated = Boolean(
+        store && processRunning && processHasDebugFlag && !portOpen && loopbackExempt !== true,
+      );
       const runtime = {
-        appVersion: null,
-        processRunning: (offline?.process ?? exact?.process ?? null) !== null,
-        processHasDebugFlag: exact !== null,
-        portOpen: exact !== null,
-        portBrowser: null,
+        appVersion,
+        processRunning,
+        processHasDebugFlag,
+        portOpen,
+        portBrowser,
+        loopbackExempt,
+        loopbackIsolated,
+        listenerCount: snapshot.listeners.length,
       };
       return {
         platform: "win32",
@@ -2975,16 +3268,19 @@ export async function runCli(argv, overrides = {}) {
         diagnosis: classifyInjection(runtime),
       };
     }
-    const discovery = await (deps.discoverCodex ?? discoverCodex)();
+    const discovery = await (deps.discoverCodex ?? discoverCodex)({ product: productId });
     const runtime = await (deps.runtimeDiagnostics ?? runtimeDiagnostics)({
       appPath: discovery.app,
       port: selectedPort,
+      product: productId,
     });
     return {
       ...discovery,
+      product: productId,
+      productName: profile.appDisplayName,
       cdpPort: selectedPort,
       ...runtime,
-      diagnosis: classifyInjection(runtime),
+      diagnosis: classifyInjection(runtime, { product: productId }),
     };
   }
   throw new Error(`未知命令：${command}`);

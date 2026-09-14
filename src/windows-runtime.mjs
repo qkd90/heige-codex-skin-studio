@@ -10,7 +10,6 @@ const PROCESS_STARTED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,7}Z$/;
 const PROCESS_NAMES = new Set(["chatgpt", "codex"]);
 const APP_KINDS = new Set(["Win32", "StoreAlias", "StoreAumid"]);
 const TEST_FIXTURE_MAX_BYTES = 256 * 1024;
-const WINDOWS_RUNTIME_TIMEOUT_MS = 30_000;
 const APP_IDENTITY_ENV = "HEIGE_WINDOWS_APP_IDENTITY";
 const APP_IDENTITY_PRODUCT = "heige-codex-skin-studio";
 const APP_IDENTITY_MAX_BYTES = 8 * 1024;
@@ -394,51 +393,21 @@ export async function queryWindowsRuntimeSnapshot({
   }
   absoluteWindowsPath(powershellPath, "trusted Windows PowerShell path");
   absoluteWindowsPath(commonScriptPath, "trusted Windows resolver path");
-  let execution;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      execution = await execFileImpl(powershellPath, [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        WINDOWS_RUNTIME_SCRIPT,
-        commonScriptPath,
-        String(port),
-        identityToken ?? "",
-      ], {
-        env: isolatedWindowsPowerShellEnvironment(env),
-        timeout: WINDOWS_RUNTIME_TIMEOUT_MS,
-        maxBuffer: 256 * 1024,
-        windowsHide: true,
-      });
-      break;
-    } catch (cause) {
-      const rawDetail = Buffer.isBuffer(cause?.stderr)
-        ? cause.stderr.toString("utf8")
-        : String(cause?.stderr ?? "");
-      const detail = (identityToken
-        ? rawDetail.replaceAll(identityToken, "[redacted]")
-        : rawDetail).trim().slice(0, 1_000);
-      const timedOut = cause?.killed === true && cause?.signal === "SIGTERM"
-        && detail.length === 0;
-      if (timedOut && attempt === 0) continue;
-      const error = new Error(
-        timedOut
-          ? `Windows runtime snapshot timed out after ${WINDOWS_RUNTIME_TIMEOUT_MS} ms`
-          : detail.length === 0
-            ? "Windows runtime snapshot command failed"
-            : `Windows runtime snapshot command failed: ${detail}`,
-      );
-      error.code = timedOut
-        ? "WINDOWS_RUNTIME_SNAPSHOT_TIMEOUT"
-        : "WINDOWS_RUNTIME_SNAPSHOT_FAILED";
-      throw error;
-    }
-  }
-  const { stdout, stderr = "" } = execution;
+  const { stdout, stderr = "" } = await execFileImpl(powershellPath, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    WINDOWS_RUNTIME_SCRIPT,
+    commonScriptPath,
+    String(port),
+    identityToken ?? "",
+  ], {
+    env: isolatedWindowsPowerShellEnvironment(env),
+    timeout: 15_000,
+    maxBuffer: 256 * 1024,
+    windowsHide: true,
+  });
   if (String(stderr).trim().length !== 0) {
     throw new Error("Windows runtime snapshot wrote unexpected stderr");
   }
@@ -482,9 +451,7 @@ function uniqueRoot(processes) {
   if (processes.size === 0) return null;
   const roots = [...processes.values()].filter((entry) => !processes.has(entry.parentProcessId));
   if (roots.length !== 1) {
-    const error = new Error("Windows Codex process graph does not have one unique root");
-    error.code = "CODEX_PROCESS_AMBIGUOUS";
-    throw error;
+    throw new Error("Windows Codex process graph does not have one unique root");
   }
   const root = roots[0];
   for (const entry of processes.values()) {
@@ -492,17 +459,13 @@ function uniqueRoot(processes) {
     let current = entry;
     while (processes.has(current.parentProcessId)) {
       if (visited.has(current.pid)) {
-        const error = new Error("Windows Codex process graph contains an ownership cycle");
-        error.code = "CODEX_PROCESS_AMBIGUOUS";
-        throw error;
+        throw new Error("Windows Codex process graph contains an ownership cycle");
       }
       visited.add(current.pid);
       current = processes.get(current.parentProcessId);
     }
     if (current.pid !== root.pid) {
-      const error = new Error("Windows Codex process graph contains an orphan component");
-      error.code = "CODEX_PROCESS_AMBIGUOUS";
-      throw error;
+      throw new Error("Windows Codex process graph contains an orphan component");
     }
   }
   return root;
@@ -555,3 +518,35 @@ export function classifyWindowsPreflightSnapshot(input, { port, requirePort = tr
 }
 
 export const windowsRuntimePowerShellScript = WINDOWS_RUNTIME_SCRIPT;
+
+export async function queryWindowsLoopbackExempt({
+  packageFamilyName,
+  execFileImpl = execFile,
+  env = process.env,
+} = {}) {
+  if (
+    typeof packageFamilyName !== "string" ||
+    packageFamilyName.length === 0 ||
+    packageFamilyName.length > 256 ||
+    /[\0\r\n]/.test(packageFamilyName)
+  ) {
+    return null;
+  }
+  const systemRoot = env.SystemRoot;
+  if (typeof systemRoot !== "string" || !win32.isAbsolute(systemRoot)) {
+    return null;
+  }
+  const exe = win32.join(systemRoot, "System32", "CheckNetIsolation.exe");
+  try {
+    const { stdout, stderr = "" } = await execFileImpl(exe, ["LoopbackExempt", "-s"], {
+      env: isolatedWindowsPowerShellEnvironment(env),
+      timeout: 10_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true,
+    });
+    const text = `${String(stdout)}\n${String(stderr)}`;
+    return text.toLowerCase().includes(packageFamilyName.toLowerCase());
+  } catch {
+    return null;
+  }
+}

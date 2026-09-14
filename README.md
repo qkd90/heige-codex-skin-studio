@@ -18,6 +18,44 @@
 
 </div>
 
+## 赞助与推荐
+
+<table>
+  <tr>
+    <td width="190" align="center">
+      <a href="https://heyroute.ai/vip" target="_blank" rel="noopener noreferrer">
+        <img src="https://heyroute.ai/brand/heyroute-logo.png?v=rounded-rect" width="163" alt="HeyRoute">
+      </a>
+    </td>
+    <td>
+      <strong>HeyRoute｜AI 编程与多模态 API 入口</strong><br><br>
+      💻&nbsp;<strong>AI 编程接入：</strong>一个 API Key 可接入 Codex、Claude Code、Cursor 及 OpenAI 兼容客户端，替换 Base URL 即可开始。<br>
+      🎨&nbsp;<strong>多模态创作：</strong>支持语言模型、AI 生图、生视频和图像编辑，适合内容创作、应用开发与 Agent 工作流。<br>
+      🧠&nbsp;<strong>多模型入口：</strong>覆盖 OpenAI、Claude、Gemini、Grok、DeepSeek、Kimi、Qwen、GLM 等模型系列，具体可用模型以平台实时页面为准。<br>
+      📊&nbsp;<strong>调用记录可查：</strong>统一管理 API Key、用量与调用记录，方便测试不同模型并核对实际消耗。<br>
+      🎁&nbsp;<strong>注册福利：</strong>通过 <a href="https://heyroute.ai/vip" target="_blank" rel="noopener noreferrer"><strong>专属注册链接</strong></a> 完成注册，即送 <strong>US$15 试用额度</strong>。先跑通真实任务，再决定是否充值。
+    </td>
+  </tr>
+</table>
+
+> ## 🆕 5.5.15 更新：Mac 专属双产品皮肤启动器
+>
+> macOS 安装后会得到独立的「HeiGe 皮肤启动器」。它能分别打开或关闭 Codex、WorkBuddy 的当前皮肤，并提供一键修复和诊断日志入口。电脑重启、客户端更新或皮肤意外丢失后，无需重新执行命令，点击启动器即可恢复最近使用的皮肤。
+>
+> 本版同时集中修复 WorkBuddy 的透明浮层问题。权限确认、任务归档、专家召唤等同源对话框恢复不透明主题底色，并补齐文件管理下拉菜单的实底保护。
+
+![真机截图：HeiGe 皮肤启动器 5.5.15](docs/images/macos-launcher-5.5.15-live.webp)
+
+*5.5.15 真机截图：Codex 与 WorkBuddy 独立控制，支持打开皮肤、关闭皮肤、一键修复和诊断日志，夜间模式保持清晰可读。*
+
+> ## 🆕 重大升级：现已支持国产 AI 编程工具 WorkBuddy
+>
+> 同一套引擎，现在也能给腾讯 CodeBuddy 桌面端（WorkBuddy）换肤。一次性皮肤、即点即换、一键还原原生界面，用法见 [WorkBuddy 章节](#workbuddy腾讯-codebuddy-桌面端)。
+
+![真机截图：WorkBuddy 换上 Miku 488137 主题](docs/images/workbuddy-miku-live.webp)
+
+*真机截图：WorkBuddy 5.3.11 换上 Miku 488137 主题，顶部中间同样是「主题」入口，主题中心即点即换。*
+
 ![真机截图：Miku 主题与顶部主题切换入口](docs/images/theme-switcher-live.webp)
 
 *真机截图：Miku 488137 高精度主题，顶部中间的「主题」入口直接打开主题中心。*
@@ -47,7 +85,21 @@ Windows 11 版本现已发布：[查看最新 Release](https://github.com/HeiGeA
 - 隐藏按钮：顶部主题入口可选择「隐藏此按钮」，收起为小圆点；点击即可恢复，状态会保存。
 - 随机主题：提供持久化的随机主题开关，随机选择主题并尽量避免连续重复。
 
-> Microsoft Store/MSIX 客户端仍需真机验证；若其阻止本机调试端口，自动接管无法完成。
+> Microsoft Store/MSIX 客户端仍需真机验证。商店版若报回环隔离，可先运行 `scripts\windows\enable-loopback.bat`（一次管理员权限）再重试 apply；自动接管在端口仍不可达时无法完成。
+
+## WorkBuddy（腾讯 CodeBuddy 桌面端）
+
+同一套引擎也能给 WorkBuddy 换肤，走本机回环 CDP（`127.0.0.1:9342`，与 Codex 的 9341 互不干扰），同样不修改 `app.asar`：
+
+```bash
+"<仓库路径>/scripts/workbuddy-apply.command" --restart
+```
+
+应用后 WorkBuddy 顶部出现 🎨 主题中心，内置主题即点即换；还原运行 `scripts/workbuddy-restore.command`。三点实话：
+
+- WorkBuddy 侧只做一次性皮肤，不支持常驻。它的 renderer 是本地 `file://` 页面，回调控制服务时带的来源是 `Origin: null`，放行会削弱控制服务的来源校验，所以这版直接不开控制通道。重启 WorkBuddy 后皮肤消失属预期，重跑一次 apply 即可。
+- 需要本机 Node.js 22 或更新版本（WorkBuddy 自身不带可执行的 Node）。
+- macOS 在 WorkBuddy 5.3.11 真机验证；Windows 侧只写了结构，未在真机验证。
 
 ## 快速开始（macOS）
 
@@ -57,9 +109,15 @@ Windows 11 版本现已发布：[查看最新 Release](https://github.com/HeiGeA
 open "<仓库路径>/scripts/install.command"
 ```
 
-装完默认应用 Miku 预设。之后所有切换都在 Codex 顶部中间的 🎨 菜单里完成：12 套内置主题、原生界面、深浅外观联动，即点即换。应用皮肤时 Codex 会正常退出并以本机调试模式重新打开，当前任务先保存。
+装完默认应用 Miku 预设，并在 `$HOME/Applications` 创建或升级带 Miku 图标的「HeiGe 皮肤启动器」。电脑重启、Codex 或 WorkBuddy 更新、原生启动导致皮肤不在时，直接点击这个 APP。原生面板会显示 Codex 与 WorkBuddy 两张产品卡片，以及各自最近使用的皮肤；每张卡可以打开或关闭当前产品的皮肤。底部「一键修复」会对已安装产品执行干净重启并恢复各自最近皮肤，使用前先保存当前任务。启动器不重复提供主题选择，日常切换仍在目标 APP 顶部的 🎨 菜单里完成。
 
-Windows 用 `scripts\windows\install.bat` 安装；日常入口是 `scripts/windows/apply.ps1`、兼容名 `scripts/windows/enable-skin.bat`（只恢复当前会话）、`scripts/windows/pause.ps1`、`scripts/windows/resume.ps1`、`scripts/windows/restore.ps1` 和 `scripts/windows/close-codex.bat`（只安全完整退出 Codex/GPT 桌面端并保持关闭，不改常驻、不自动重启）。彻底移除时运行 `scripts\windows\uninstall.bat`：它会注销当前用户计划任务、移除开始菜单入口、清理 AppData 状态和稳定安装目录。即使稳定安装目录已被手动删除，也可从源码目录运行该卸载入口清理残留。Microsoft Store/MSIX 真机待验证，细节见[完整手册](docs/manual.md)。
+```bash
+open "$HOME/Applications/HeiGe 皮肤启动器.app"
+```
+
+Codex 卡片只恢复当前会话，不会擅自打开「皮肤常驻」；WorkBuddy 卡片保持一次性皮肤，不创建常驻服务。「关闭皮肤」只暂停当前会话，保留最近主题和常驻选择。「一键修复」会重启已安装的目标 APP，但不会修改 `app.asar`。启动器不会创建新的登录项、联网下载代码或请求管理员权限。运行失败会在卡片内显示并允许重试，「诊断与日志」可打开两个产品各自隔离的状态目录。
+
+Windows 用 `scripts\windows\install.bat` 安装；日常入口是 `scripts/windows/apply.ps1`、兼容名 `scripts/windows/enable-skin.bat`（只恢复当前会话）、`scripts/windows/pause.ps1`、`scripts/windows/resume.ps1`、`scripts/windows/restore.ps1`、`scripts/windows/close-codex.bat`（只安全完整退出 Codex/GPT 桌面端并保持关闭，不改常驻、不自动重启）和 `scripts/windows/enable-loopback.bat`（商店版回环隔离时一次性提权豁免，不在每次 apply 时弹 UAC）。彻底移除时运行 `scripts\windows\uninstall.bat`：它会注销当前用户计划任务、移除开始菜单入口、清理 AppData 状态和稳定安装目录。即使稳定安装目录已被手动删除，也可从源码目录运行该卸载入口清理残留。Microsoft Store/MSIX 真机待验证，细节见[完整手册](docs/manual.md)。
 
 ## 用一张图做你自己的主题
 
@@ -104,8 +162,9 @@ Windows 用 `scripts\windows\install.bat` 安装；日常入口是 `scripts/wind
 - 注入走本机回环 CDP（`127.0.0.1:9341`），不修改 `app.asar`、应用二进制或签名资源；未来 Codex Desktop 改变启动参数或界面结构时，本项目仍可能需要适配。
 - 常驻由你决定：顶部菜单「皮肤常驻」开关是唯一受支持的开启常驻入口，关闭时会先确认，并提示「关闭后本次继续使用；下次启动恢复原生界面」。
 - 阅读增强默认开启：最终回复和过程回复都使用 90％ 主题自适应半透明底色，并保留对称留白保护文字可读性；可在主题中心随时关闭，不使用大面积实时模糊、阴影、观察器、滚动监听或后台请求。
-- 想让皮肤重启后一直在：先打开「HeiGe 皮肤启动器」恢复当前会话，再到顶部菜单打开开关进入常驻。开启成功时开关应在数秒内变绿，且状态与计划任务/LaunchAgent 已写入；失败会立刻提示，不会长时间停在「正在等待后台确认」。常驻开启后，正常重启 Codex 也会由后台控制器接管并恢复皮肤（Windows 与 macOS 均支持；Store 若屏蔽调试端口则无法接管）。
-- 「HeiGe 皮肤启动器」和兼容名 `enable-skin.command` 都只恢复当前会话；`enable-persist.command` 是弃用的非零退出入口，不再执行任何启用动作。
+- 想让皮肤重启后一直在：先打开「HeiGe 皮肤启动器」恢复当前会话，再到顶部菜单打开开关进入常驻。开启成功时开关应在数秒内变绿，且状态与计划任务或 LaunchAgent 已写入；失败会立刻提示，不会长时间停在「正在等待后台确认」。常驻开启后，正常重启 Codex 也会由后台控制器接管并恢复皮肤（Windows 与 macOS 均支持；Store 若屏蔽调试端口则无法接管）。
+- macOS 每次安装都会生成或升级 Schema 5 原生「HeiGe 皮肤启动器」。启动器使用独立的初音未来窗口 Logo，并自动读取 Codex 与 WorkBuddy 的本机真实 APP 图标；universal AppKit 二进制、Dock 图标、窗口 Logo 和入口均纳入本地 ad hoc 完整性签名，并注册到 LaunchServices。ad hoc 签名用于发现本地篡改，不等于 Apple Developer ID 签名或公证，也不承诺绕过未来系统安全策略。
+- 「HeiGe 皮肤启动器」按产品走专用 `launch-skin.command`、`close-skin.command`、`repair-skin.command` 和版本绑定的内部路由。Codex 使用 9341，WorkBuddy 使用 9342，各自优先恢复最近一次非原生主题；关闭只暂停当前会话，一键修复会干净重启并恢复最近皮肤。没有历史选择时才使用 `miku-488137`。`enable-skin.command` 仍是 session-only 兼容入口；`enable-persist.command` 是弃用的非零退出入口。
 - 整窗突然变卡（帧率骤降、输入滚动全局迟滞）：跑 `scripts/apply.command --restart` 先彻底退出 Codex 再拉起注入；健康会话下直接重跑 apply 是幂等的，不会重启进程。
 - 支持范围：macOS 有日期化真机验证；Windows 走跨 PowerShell 自动化，Microsoft Store/MSIX 真机待验证；使用系统 Node 时要求 Node.js 22 或更新版本。
 - 安全边界：CDP 即使只绑定本机回环也无认证，本机同权限进程在威胁边界内，完整说明见 [SECURITY.md](SECURITY.md)；素材来源逐文件登记在 [ASSET_PROVENANCE.md](ASSET_PROVENANCE.md)。

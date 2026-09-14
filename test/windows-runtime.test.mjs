@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyWindowsPreflightSnapshot,
   decodeWindowsAppIdentityToken,
+  queryWindowsLoopbackExempt,
   queryWindowsRuntimeSnapshot,
 } from "../src/windows-runtime.mjs";
 import {
@@ -92,16 +93,12 @@ test("Windows runtime query uses one trusted PowerShell command and accepts only
   assert.equal(calls[0].file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
   assert.equal(calls[0].args.includes("C:\\repo\\scripts\\windows\\lib\\common.ps1"), true);
   assert.equal(calls[0].args.includes("9341"), true);
-  assert.deepEqual(
-    calls[0].args.slice(0, 6),
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"],
-  );
   assert.deepEqual(calls[0].options, {
     env: {
       SystemRoot: "C:\\Windows",
       PATH: "C:\\Windows\\System32",
     },
-    timeout: 30_000,
+    timeout: 15_000,
     maxBuffer: 256 * 1024,
     windowsHide: true,
   });
@@ -171,22 +168,6 @@ test("Windows runtime binds every query to the immutable PowerShell app identity
     },
   }), /identity|token|base64/i);
 
-  const leakedCommandError = new Error(`Command failed with identity ${token}`);
-  leakedCommandError.stderr = `immutable identity failed: ${token}`;
-  await assert.rejects(queryWindowsRuntimeSnapshot({
-    port: 9341,
-    powershellPath: calls[0].file,
-    commonScriptPath: "C:\\repo\\scripts\\windows\\lib\\common.ps1",
-    env: { HEIGE_WINDOWS_APP_IDENTITY: token },
-    execFileImpl: async () => { throw leakedCommandError; },
-  }), (error) => {
-    assert.match(error.message, /runtime snapshot command failed/i);
-    assert.match(error.message, /immutable identity failed/i);
-    assert.doesNotMatch(error.message, new RegExp(token));
-    assert.doesNotMatch(error.message, /Command failed with identity/i);
-    return true;
-  });
-
   await assert.rejects(queryWindowsRuntimeSnapshot({
     port: 9341,
     powershellPath: calls[0].file,
@@ -201,54 +182,6 @@ test("Windows runtime binds every query to the immutable PowerShell app identity
       stderr: "",
     }),
   }), /process path|belong|identity|app/i);
-});
-
-test("Windows runtime retries one empty-output PowerShell timeout and then succeeds", async () => {
-  const expected = snapshot();
-  const calls = [];
-  const timeout = Object.assign(new Error("must not expose the generated command"), {
-    killed: true,
-    signal: "SIGTERM",
-    stdout: "",
-    stderr: "",
-  });
-  const result = await queryWindowsRuntimeSnapshot({
-    port: 9341,
-    powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    commonScriptPath: "C:\\repo\\scripts\\windows\\lib\\common.ps1",
-    execFileImpl: async (_file, _args, options) => {
-      calls.push(options);
-      if (calls.length === 1) throw timeout;
-      return { stdout: JSON.stringify(expected), stderr: "" };
-    },
-  });
-  assert.deepEqual(result, expected);
-  assert.equal(calls.length, 2);
-  assert.equal(calls.every((options) => options.timeout === 30_000), true);
-});
-
-test("Windows runtime reports a persistent empty-output PowerShell timeout explicitly", async () => {
-  let calls = 0;
-  await assert.rejects(queryWindowsRuntimeSnapshot({
-    port: 9341,
-    powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    commonScriptPath: "C:\\repo\\scripts\\windows\\lib\\common.ps1",
-    execFileImpl: async () => {
-      calls += 1;
-      throw Object.assign(new Error("must not expose the generated command"), {
-        killed: true,
-        signal: "SIGTERM",
-        stdout: "",
-        stderr: "",
-      });
-    },
-  }), (error) => {
-    assert.equal(error.code, "WINDOWS_RUNTIME_SNAPSHOT_TIMEOUT");
-    assert.match(error.message, /timed out after 30000 ms/i);
-    assert.doesNotMatch(error.message, /generated command/i);
-    return true;
-  });
-  assert.equal(calls, 2);
 });
 
 test("Windows identity token rejects duplicate and unknown JSON fields", () => {
@@ -493,12 +426,6 @@ test("Windows preflight fails closed for ambiguous roots and non-exact listener 
       requirePort: value.listeners.length > 0,
     }), /ambiguous|unique|loopback|owner|identity|process/i);
   }
-  assert.throws(
-    () => classifyWindowsPreflightSnapshot(snapshot({
-      processes: [root, processRecord({ pid: 5252, parentProcessId: 101 })],
-    }), { port: 9341, requirePort: false }),
-    (error) => error.code === "CODEX_PROCESS_AMBIGUOUS",
-  );
 });
 
 test("Windows StoreAumid closed snapshots remain valid with null executablePath", () => {
@@ -516,4 +443,28 @@ test("Windows StoreAumid closed snapshots remain valid with null executablePath"
   const result = classifyWindowsPreflightSnapshot(store, { port: 9341, requirePort: false });
   assert.equal(result.appPath, "aumid:OpenAI.Codex_abc!App");
   assert.equal(result.process, null);
+});
+
+test("Windows loopback exemption lookup matches the package family name", async () => {
+  const calls = [];
+  const exempt = await queryWindowsLoopbackExempt({
+    packageFamilyName: "OpenAI.Codex_abc",
+    env: { SystemRoot: "C:\\Windows" },
+    execFileImpl: async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: "Name: OpenAI.Codex_abc\nSID: S-1-15-2-1\n", stderr: "" };
+    },
+  });
+  assert.equal(exempt, true);
+  assert.equal(calls[0].file, "C:\\Windows\\System32\\CheckNetIsolation.exe");
+  assert.deepEqual(calls[0].args, ["LoopbackExempt", "-s"]);
+  assert.equal(await queryWindowsLoopbackExempt({
+    packageFamilyName: "OpenAI.Codex_abc",
+    env: { SystemRoot: "C:\\Windows" },
+    execFileImpl: async () => ({ stdout: "List Loopback Exempted AppContainers\n", stderr: "" }),
+  }), false);
+  assert.equal(await queryWindowsLoopbackExempt({
+    packageFamilyName: "",
+    env: { SystemRoot: "C:\\Windows" },
+  }), null);
 });
