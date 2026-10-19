@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="47b03d1f-84d1-4d88-9c68-fda7ed444667" name="更改" comment="test(skin-menu): 在保存主题时阻止皮肤常驻并提示等待&#10;&#10;- 在请求或激活皮肤常驻时，检测是否有主题正在保存&#10;- 如果正在保存主题，显示“正在保存启动器主题，请稍候后再修改皮肤常驻”的成功提示&#10;- 防止在主题保存过程中竞争控制请求&#10;- 添加测试用例验证该逻辑，确保提示文本和状态正确&#10;&#10;fix(windows-runtime): 增加 PowerShell 运行超时重试机制&#10;&#10;- 将 Windows 运行时 PowerShell 命令超时从 15 秒提升至 30 秒&#10;- 在抛出空输出超时错误时自动重试一次执行命令&#10;- 超时后区分抛出超时错误码和失败错误码，错误信息屏蔽敏感内容&#10;- 添加测试覆盖重试成功与持续超时的异常情形&#10;&#10;chore(vcs): 修正 VCS 目录映射，确保项目目录关联 Git&#10;&#10;- 在 .idea/vcs.xml 中添加映射，修正项目根目录的 VCS 绑定问题" />
+    <list default="true" id="47b03d1f-84d1-4d88-9c68-fda7ed444667" name="更改" comment="test(skin-menu): 同步" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -44,6 +44,7 @@
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "codex",
     "kotlin-language-version-configured": "true",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
@@ -91,6 +92,7 @@
       <workItem from="1786425806941" duration="42000" />
       <workItem from="1786499405609" duration="5000" />
       <workItem from="1789354462339" duration="108000" />
+      <workItem from="1789354580223" duration="277000" />
     </task>
     <task id="LOCAL-00001" summary="fix(windows): 优化Windows运行时快照获取及模糊进程图处理&#10;&#10;- 为模糊的进程图增加重试机制，最多尝试4次并适当延迟&#10;- 修改PowerShell调用参数，添加-ExecutionPolicy Bypass以提升执行成功率&#10;- 捕获并清理错误信息中的敏感identityToken，确保日志安全&#10;- 对进程图异常抛出带有CODEX_PROCESS_AMBIGUOUS代码的错误，便于识别处理&#10;- 添加针对模糊进程图的单元测试，覆盖重试成功和失败两种场景&#10;- 增加对PowerShell执行命令参数的单元测试及错误消息敏感内容过滤验证">
       <option name="closed" value="true" />
@@ -108,7 +110,23 @@
       <option name="project" value="LOCAL" />
       <updated>1786093104856</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="test(skin-menu): 同步">
+      <option name="closed" value="true" />
+      <created>1789354627416</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1789354627416</updated>
+    </task>
+    <task id="LOCAL-00004" summary="test(skin-menu): 同步">
+      <option name="closed" value="true" />
+      <created>1789354821410</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1789354821410</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -119,6 +137,7 @@
     <option name="CHECK_NEW_TODO" value="false" />
     <MESSAGE value="fix(windows): 优化Windows运行时快照获取及模糊进程图处理&#10;&#10;- 为模糊的进程图增加重试机制，最多尝试4次并适当延迟&#10;- 修改PowerShell调用参数，添加-ExecutionPolicy Bypass以提升执行成功率&#10;- 捕获并清理错误信息中的敏感identityToken，确保日志安全&#10;- 对进程图异常抛出带有CODEX_PROCESS_AMBIGUOUS代码的错误，便于识别处理&#10;- 添加针对模糊进程图的单元测试，覆盖重试成功和失败两种场景&#10;- 增加对PowerShell执行命令参数的单元测试及错误消息敏感内容过滤验证" />
     <MESSAGE value="test(skin-menu): 在保存主题时阻止皮肤常驻并提示等待&#10;&#10;- 在请求或激活皮肤常驻时，检测是否有主题正在保存&#10;- 如果正在保存主题，显示“正在保存启动器主题，请稍候后再修改皮肤常驻”的成功提示&#10;- 防止在主题保存过程中竞争控制请求&#10;- 添加测试用例验证该逻辑，确保提示文本和状态正确&#10;&#10;fix(windows-runtime): 增加 PowerShell 运行超时重试机制&#10;&#10;- 将 Windows 运行时 PowerShell 命令超时从 15 秒提升至 30 秒&#10;- 在抛出空输出超时错误时自动重试一次执行命令&#10;- 超时后区分抛出超时错误码和失败错误码，错误信息屏蔽敏感内容&#10;- 添加测试覆盖重试成功与持续超时的异常情形&#10;&#10;chore(vcs): 修正 VCS 目录映射，确保项目目录关联 Git&#10;&#10;- 在 .idea/vcs.xml 中添加映射，修正项目根目录的 VCS 绑定问题" />
-    <option name="LAST_COMMIT_MESSAGE" value="test(skin-menu): 在保存主题时阻止皮肤常驻并提示等待&#10;&#10;- 在请求或激活皮肤常驻时，检测是否有主题正在保存&#10;- 如果正在保存主题，显示“正在保存启动器主题，请稍候后再修改皮肤常驻”的成功提示&#10;- 防止在主题保存过程中竞争控制请求&#10;- 添加测试用例验证该逻辑，确保提示文本和状态正确&#10;&#10;fix(windows-runtime): 增加 PowerShell 运行超时重试机制&#10;&#10;- 将 Windows 运行时 PowerShell 命令超时从 15 秒提升至 30 秒&#10;- 在抛出空输出超时错误时自动重试一次执行命令&#10;- 超时后区分抛出超时错误码和失败错误码，错误信息屏蔽敏感内容&#10;- 添加测试覆盖重试成功与持续超时的异常情形&#10;&#10;chore(vcs): 修正 VCS 目录映射，确保项目目录关联 Git&#10;&#10;- 在 .idea/vcs.xml 中添加映射，修正项目根目录的 VCS 绑定问题" />
+    <MESSAGE value="test(skin-menu): 同步" />
+    <option name="LAST_COMMIT_MESSAGE" value="test(skin-menu): 同步" />
   </component>
 </project>

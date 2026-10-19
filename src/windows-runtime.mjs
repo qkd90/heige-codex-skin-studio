@@ -51,6 +51,11 @@ foreach ($record in $rawProcesses) {
   if ($pidValue -le 0 -or $parentPid -lt 0 -or [string]::IsNullOrWhiteSpace($path)) {
     continue
   }
+  # Codex Desktop 任务后端 codex.exe 解包在 %LOCALAPPDATA%\OpenAI\Codex\bin，是商店版自身的
+  # 合法子进程而非第二个 UI 安装；绑定 Store 身份时不能把它当成 foreign 进程而整次快照失败。
+  if (Test-HeiGeCodexInternalBackendPath -Path $path) {
+    continue
+  }
   $owner = [pscustomobject]@{ Id = $pidValue; Path = $path; ProcessName = [string]$record.Name }
   if (-not (Test-CdpOwnerMatchesApp -Owner $owner -App $app)) {
     if ($AppIdentityToken) { throw 'foreign Windows Codex process conflicts with the immutable app identity' }
